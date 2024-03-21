@@ -1,6 +1,6 @@
 # Gaussian Mixture Linear Regression
-
-## Model Description - Panel Data
+## Cross Sectional Data
+### Model Description 
 
 Let's consider a scenario where we have a set of independent variables $X$ and a set of corresponding dependent variables $y$. Suppose the total number of observation is $N$. The value of each dependent variable $y_i$ depends on the group it belongs to. Mathematically, we express this relationship as:
 
@@ -26,9 +26,9 @@ The challenge lies in the fact that the group membership is unobservable to the 
 
 There are two new contribution of this method. First, The prior probability of falling in group $g$ is explicitly modeled. The advantage of doing this is that it will help us understand what will make the data to fall into a certain group. Second, there are multiple dependent variables. The previous literature has considered situation where there are only one dependent variable. However, in real world we might care more than one variable at the same time and the interaction between these variables is modeled with the variance covariance matrix $\Sigma_g$ in different states.
 
-## Methodology
+### Methodology
 
-### Maximum Likelihood Estimation
+#### Maximum Likelihood Estimation
 
 The log-likelihood function $E[logP(\theta|X, y)]$ by definition is defined as
 
@@ -50,7 +50,7 @@ $$
 
 where the last term is the $L^P$ norm of $\theta$, and the parameter $\alpha$ controls the degree of $L^P$ regularization. The baseline model sets $\alpha = 0$ such that it won't adjust for the $L^P$ regularization, and hence it is the normal MLE estimator. The algorithm will continue with $\theta$ set to the newly estimated parameters until $\hat\theta_t = \hat\theta_{t-1}$.
 
-### Asymptotic Estimation Variance
+#### Asymptotic Estimation Variance
 
 By law of large number, the asymptotic variance of the estimator $\hat \theta$ is given by
 
@@ -60,11 +60,11 @@ $$
 
 where $df$ denote the degree of freedom, which is the number of observation minus the number of estimated parameters.
 
-### Variance Covariance Matrix Estimation
+#### Variance Covariance Matrix Estimation
 
 Since there are more than one dependent variable, the variance covariance matrix have many undetermined variables. To pin down these parameters, we need to make sure that the variance covariance matrix is a positive definite matrix. By LU decomposition of positive definite matrices, we can set the parameters to be undetermined lower triangular matrix $U_g$, where all the diagonal elements are positive. Then, we have $\Sigma_g = U_g U_g^{T}$, and the standard error of the matrix will be obtained with delta method, i.e. $Var(\hat\Sigma_g) = \frac{\partial \Sigma_g }{\partial \theta}^T Var(\hat\theta)\frac{\partial \Sigma_g }{\partial \theta}$​.
 
-### Model Prediction
+#### Model Prediction
 
 After the estimation we can use the estimated model to obtain out of sample predictions. Suppose $X_i$ is the $i$-th out of sample independent variable matrix. The optimal model prediction $\tilde y$ satisfies:
 
