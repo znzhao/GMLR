@@ -9,6 +9,7 @@ y_{i} = \beta_g X_i+\epsilon_{g,i}\quad \text{ if } i \text{ is in group } g
 $$
 
 where $\epsilon_{g,i}\sim N(0, \Sigma_g)$. Denote the group label of the $i$-th data point as $z_i$, the group membership probability for the $i$-th observation being in group $g$ is given by:
+
 $$
 P(z_i = g) = P(i \text{ is in group } g) = \frac{exp(\gamma_g X_i)}{1+\sum_{g = 1}^{G-1}exp(\gamma_g X_i)}
 $$
@@ -30,16 +31,19 @@ There are two new contribution of this method. First, The prior probability of f
 ### Maximum Likelihood Estimation
 
 The log-likelihood function $E[logP(\theta|X, y)]$ by definition is defined as
+
 $$
 E[logP(X, y, \theta)|X, y] = \frac{1}{N}\sum_{i = 1}^N \sum_{g = 1}^G P(\theta, z_i = g| X_i, y_i)log(P(z_i = g)P(\theta|X_i, y_i, z_i = g))
 $$
 
 where by Bayesian rule,
+
 $$
 P(\theta, z_i = g| X_i, y_i) = \frac{P(z_i = g)P(\theta|X_i, y_i, z_i = g)}{\sum_g P(z_i = g)P(\theta|X_i, y_i, z_i = g)}
 $$
 
 Notice that $P(z_i = g)$ denotes the prior probability that the $i$-th data falls in group $g$, which comes from the multi-logit model. $P(\theta, z_i = g| X_i, y_i)$ denotes the posterior probability after we observe the data. $P(\theta|X_i, y_i, z_i = g)$ is defined under the consumption that the error follows a joint normal distribution. The model is solved with the EM algorithm. The algorithm contains two steps: expectation step and maximum likelihood step. We start with an initial guess of $\theta$. Given the guess in step $t-1$, the optimal maximum likelihood estimator $\hat \theta_t$ will solve:
+
 $$
 \hat \theta_{t} = argmax_\theta\ E[logP(X, y, \theta_{t-1})|X, y] + \alpha|| \theta_{t-1}||_p
 $$
@@ -49,6 +53,7 @@ where the last term is the $L^P$ norm of $\theta$, and the parameter $\alpha$ co
 ### Asymptotic Estimation Variance
 
 By law of large number, the asymptotic variance of the estimator $\hat \theta$ is given by
+
 $$
 Var(\hat\theta) = \frac{1}{df}(\frac{1}{N}\sum_{i = 0}^N\frac{\partial E[logP(X_i, y_i, \theta)|X, y]}{\partial \theta}^T  \frac{\partial E[logP(X_i, y_i, \theta)|X, y]}{\partial \theta})^{-1}
 $$
@@ -62,6 +67,7 @@ Since there are more than one dependent variable, the variance covariance matrix
 ### Model Prediction
 
 After the estimation we can use the estimated model to obtain out of sample predictions. Suppose $X_i$ is the $i$-th out of sample independent variable matrix. The optimal model prediction $\tilde y$ satisfies:
+
 $$
 \tilde y = argmax_t\ E[logP(X_i, y, \hat \theta)|X_i] = \sum_{g = 1}^G P(z_i = g) log(P(z_i = g)P(\theta|X_i, y_i, z_i = g))
 $$
@@ -77,6 +83,7 @@ y_{t} = \beta_g X_t+\epsilon_{g,t}\quad \text{ if } t \text{ is in state } g
 $$
 
 where $\epsilon_{g,t}\sim N(0, \Sigma_g)$. Denote the group label of time $t$ as $z_t$, the group membership probability for time $t$ being in group $g$ is given by:
+
 $$
 P(z_t = g|P(z_{t-1} = x)\ \forall x\in G) = \frac{exp(\gamma_g X_t + \sum_{x = 1}^{G}\eta_{g,x} P(z_{t-1} = x))}{1+\sum_{g = 1}^{G-1}exp(\gamma_g X_t + \sum_{x = 1}^{G}\eta_{g,x} P(z_{t-1} = x)))}
 $$
@@ -98,6 +105,8 @@ We start with a random guess of the state of the periods. The algorithm runs rep
 1. Estimation Step: given the probability of last period being in group $x$,i.e. the probability calculated in the update step for last period $t-1$, and the last step estimated parameters $\theta$, obtain the probability that this period falls in group $g$, i.e. $P(z_t = g|P(z_{t-1} = x)\ \forall x\in G, X_t, y_{t-1})$.
 
 2. Update Step: update the probability that after observing $y_t$, the probability that period t falls in group $g$ according to Bayes rule, i.e. $P(z_t = G|P(z_{t-1} = x)\ \forall x\in G, X_t, y_t)$. Use this probability to update the probability for the next period: the update method is:
+
+
    $$
    P(z_t = G|P(z_{t-1} = x)\ \forall x\in G, X_t, y_t) = \frac{\phi(y_t - \beta_g X_t, \Sigma_g)P(z_t = g|P(z_{t-1} = x)\ \forall x\in G, X_t, y_{t-1})}{\sum_g \phi(y_t - \beta_g X_t, \Sigma_g)P(z_t = g|P(z_{t-1} = x)\ \forall x\in G, X_t, y_{t-1})}
    $$
