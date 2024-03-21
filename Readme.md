@@ -11,7 +11,7 @@ $$
 where $\epsilon_{g,i}\sim N(0, \Sigma_g)$. Denote the group label of the $i$-th data point as $z_i$, the group membership probability for the $i$-th observation being in group $g$ is given by:
 
 $$
-P(z_i = g) = P(i \text{ is in group } g) = \frac{exp(\gamma_g X_i)}{1 + \sum_{g} exp(\gamma_g X_i)}
+P(z_i = g) = P(i \text{ is in group } g) = \frac{exp(\gamma_g X_i)}{1 + \sum_{g=\{1,2,...,G-1\}} exp(\gamma_g X_i)}
 $$
 
 Here, $\beta_g$ represents the coefficient for group $g$, and $\epsilon_{g,i}$ is the error term for the $i$-th observation in group $g$.
@@ -19,7 +19,7 @@ Here, $\beta_g$ represents the coefficient for group $g$, and $\epsilon_{g,i}$ i
 For all groups except the last one, the probability of the $i$-th observation being in group $G$ is calculated as:
 
 $$
-P(z_i = G) = P(i \text{ is in group } G) = \frac{1}{1 + \sum_{g} exp(\gamma_g X_i)}
+P(z_i = G) = P(i \text{ is in group } G) = \frac{1}{1 + \sum_{g=\{1,2,...,G-1\}} exp(\gamma_g X_i)}
 $$
 
 The challenge lies in the fact that the group membership is unobservable to the observer. Therefore, we cannot definitively determine which group each data point belongs to. Consequently, it becomes challenging to systematically estimate the parameters of the model, denoted as $\theta = {vec(\beta_g), vec(\gamma_g), vec(\Sigma_g)}$.
