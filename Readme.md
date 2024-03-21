@@ -42,20 +42,22 @@ $$
 P(z_i = g| X_i, y_i, \theta_{m-1}) = \frac{P(z_i = g|X_i, \theta_{m-1})P(y_i|X_i, z_i = g, \theta_{m-1})}{\sum_{g = \{1,2,...,G\}}P(z_i = g|X_i, \theta_{m-1})P(y_i|X_i, z_i = g, \theta_{m-1})}
 $$
 
-Notice that $P(z_i = g)$ denotes the prior probability that the $i$-th data falls in group $g$, which comes from the multi-logit model. $P(\theta, z_i = g| X_i, y_i)$ denotes the posterior probability after we observe the data. $P(\theta|X_i, y_i, z_i = g)$ is defined under the consumption that the error follows a joint normal distribution. The model is solved with the EM algorithm. The algorithm contains two steps: expectation step and maximum likelihood step. We start with an initial guess of $\theta$. Given the guess in step $t-1$, the optimal maximum likelihood estimator $\hat \theta_t$ will solve:
+Notice that $P(z_i = g|X_i, \theta_{m-1})$ denotes the prior probability that the $i$-th data falls in group $g$, which comes from the multi-logit model, while $P(z_i = g| X_i, y_i, \theta_{m-1})$ denotes the posterior probability after we observe the data. $P(y_i|X_i, z_i = g, \theta)$ and $P(y_i|X_i, z_i = g, \theta_{m-1})$ are defined under the assumption that the error follows a joint normal distribution. 
+
+The model is solved with the EM algorithm. The algorithm contains two steps: expectation step and maximum likelihood step. We start with an initial guess of $\theta$. Given the guess in step $m-1$, the optimal maximum likelihood estimator $\hat \theta_m$ will solve:
 
 $$
-\hat \theta_{t} = argmax_\theta\ E[logP(X, y, \theta_{t-1})|X, y] + \alpha|| \theta_{t-1}||_p
+\hat \theta_{m} = argmax_\theta\ E[logP(y|X, \theta)|X, y, \theta_{m-1}] + \alpha|| \theta_{m-1}||_p
 $$
 
-where the last term is the $L^P$ norm of $\theta$, and the parameter $\alpha$ controls the degree of $L^P$ regularization. The baseline model sets $\alpha = 0$ such that it won't adjust for the $L^P$ regularization, and hence it is the normal MLE estimator. The algorithm will continue with $\theta$ set to the newly estimated parameters until $\hat\theta_t = \hat\theta_{t-1}$.
+where the last term is the $L^P$ norm of $\theta$, and the parameter $\alpha$ controls the degree of $L^P$ regularization. The baseline model sets $\alpha = 0$ such that it won't adjust for the $L^P$ regularization, and hence it is the normal MLE estimator. The algorithm will continue with $\theta$ set to the newly estimated parameters until $\hat\theta_m = \hat\theta_{m-1}$.
 
 #### Asymptotic Estimation Variance
 
 By law of large number, the asymptotic variance of the estimator $\hat \theta$ is given by
 
 $$
-Var(\hat\theta) = \frac{1}{df}(\frac{1}{N}\sum_{i = 0}^N \frac{\partial E[logP(X_i, y_i, \theta)|X, y]}{\partial \theta}^T  \frac{\partial E[logP(X_i, y_i, \theta)|X, y]}{\partial \theta})^{-1}
+Var(\hat\theta) = \frac{1}{df}(\frac{1}{N}\sum_{i = 0}^N \frac{\partial E[logP(y|X, \theta)|X, y, \theta]}{\partial \theta}^T  \frac{\partial E[logP(y|X, \theta)|X, y, \theta]}{\partial \theta})^{-1}
 $$
 
 where $df$ denote the degree of freedom, which is the number of observation minus the number of estimated parameters.
@@ -69,7 +71,7 @@ Since there are more than one dependent variable, the variance covariance matrix
 After the estimation we can use the estimated model to obtain out of sample predictions. Suppose $X_i$ is the $i$-th out of sample independent variable matrix. The optimal model prediction $\tilde y$ satisfies:
 
 $$
-\tilde y = argmax_t\ E[logP(X_i, y, \hat \theta)|X_i] = \sum_{g = 1}^G P(z_i = g)log(P(z_i = g)P(\theta|X_i, y_i, z_i = g))
+\tilde y = argmax_y\ E[logP(y|X_i, \hat \theta)|X_i, \hat \theta] =argmax_y\ \sum_{g = 1}^G P(z_i = g|X_i, \hat\theta)log(P(z_i = g|X_i, \hat\theta)P(y|\theta|X_i, z_i = g, \hat\theta))
 $$
 
 Notice the key difference between the objective function here and the objective function in the estimation step. The probability used for calculating the expectation is the prior probability in the prediction, while the probability used before is the posterior probability after observing $y$. Since with prediction there is no observed $y$, so naturally we can only use the prior to calculate the expectation. The prediction standard error is also calculated numerically with the delta method, i.e.$ Var(\tilde y) = \frac{\partial \tilde y }{\partial \theta}^T Var(\hat\theta)\frac{\partial \tilde y }{\partial \theta}$.
