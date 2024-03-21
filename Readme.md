@@ -30,16 +30,16 @@ There are two new contribution of this method. First, The prior probability of f
 
 #### Maximum Likelihood Estimation
 
-The log-likelihood function $E[logP(\theta|X, y)]$ by definition is defined as
+Suppose in step m-1 we obtain a set of parameter estimition. Given this information, the expected log-likelihood function $E[logP(\theta|X, y)]$ by definition is defined as
 
 $$
-E[logP(X, y, \theta)|X, y] = \frac{1}{N}\sum_{i = 1}^N \sum_{g = 1}^{G} P(\theta, z_i = g| X_i, y_i)log(P(z_i = g)P(\theta|X_i, y_i, z_i = g))
+E[logP(y|X, \theta)|X, y, \theta_{m-1}] = \frac{1}{N}\sum_{i = 1}^N \sum_{g = 1}^{G} P(z_i = g| X_i, y_i, \theta_{m-1})log(P(z_i = g|X_i, \theta)P(y_i|X_i, z_i = g, \theta))
 $$
 
 where by Bayesian rule,
 
 $$
-P(\theta, z_i = g| X_i, y_i) = \frac{P(z_i = g)P(\theta|X_i, y_i, z_i = g)}{\sum_{g}P(z_i = g) P(\theta|X_i, y_i, z_i = g)}
+P(z_i = g| X_i, y_i, \theta_{m-1}) = \frac{P(z_i = g|X_i, \theta_{m-1})P(y_i|X_i, z_i = g, \theta_{m-1})}{\sum_{g = \{1,2,...,G\}}P(z_i = g|X_i, \theta_{m-1})P(y_i|X_i, z_i = g, \theta_{m-1})}
 $$
 
 Notice that $P(z_i = g)$ denotes the prior probability that the $i$-th data falls in group $g$, which comes from the multi-logit model. $P(\theta, z_i = g| X_i, y_i)$ denotes the posterior probability after we observe the data. $P(\theta|X_i, y_i, z_i = g)$ is defined under the consumption that the error follows a joint normal distribution. The model is solved with the EM algorithm. The algorithm contains two steps: expectation step and maximum likelihood step. We start with an initial guess of $\theta$. Given the guess in step $t-1$, the optimal maximum likelihood estimator $\hat \theta_t$ will solve:
