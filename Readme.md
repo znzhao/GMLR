@@ -1,6 +1,6 @@
 # Gaussian Mixture Linear Regression
 
-## Model Description
+## Model Description - Panel Data
 
 Let's consider a scenario where we have a set of independent variables $X$ and a set of corresponding dependent variables $y$. Suppose the total number of observation is $N$. The value of each dependent variable $y_i$ depends on the group it belongs to. Mathematically, we express this relationship as:
 
