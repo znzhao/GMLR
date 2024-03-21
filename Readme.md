@@ -39,7 +39,7 @@ $$
 where by Bayesian rule,
 
 $$
-P(\theta, z_i = g| X_i, y_i) = \frac{P(z_i = g)P(\theta|X_i, y_i, z_i = g)}{\sum_g P(z_i = g)P(\theta|X_i, y_i, z_i = g)}
+P(\theta, z_i = g| X_i, y_i) = \frac{P(z_i = g)P(\theta|X_i, y_i, z_i = g)}{\sum_gP(z_i = g)P(\theta|X_i, y_i, z_i = g)}
 $$
 
 Notice that $P(z_i = g)$ denotes the prior probability that the $i$-th data falls in group $g$, which comes from the multi-logit model. $P(\theta, z_i = g| X_i, y_i)$ denotes the posterior probability after we observe the data. $P(\theta|X_i, y_i, z_i = g)$ is defined under the consumption that the error follows a joint normal distribution. The model is solved with the EM algorithm. The algorithm contains two steps: expectation step and maximum likelihood step. We start with an initial guess of $\theta$. Given the guess in step $t-1$, the optimal maximum likelihood estimator $\hat \theta_t$ will solve:
@@ -69,7 +69,7 @@ Since there are more than one dependent variable, the variance covariance matrix
 After the estimation we can use the estimated model to obtain out of sample predictions. Suppose $X_i$ is the $i$-th out of sample independent variable matrix. The optimal model prediction $\tilde y$ satisfies:
 
 $$
-\tilde y = argmax_t\ E[logP(X_i, y, \hat \theta)|X_i] = \sum_{g = 1}^G P(z_i = g) log(P(z_i = g)P(\theta|X_i, y_i, z_i = g))
+\tilde y = argmax_t\ E[logP(X_i, y, \hat \theta)|X_i] = \sum_{g = 1}^G P(z_i = g)log(P(z_i = g)P(\theta|X_i, y_i, z_i = g))
 $$
 
 Notice the key difference between the objective function here and the objective function in the estimation step. The probability used for calculating the expectation is the prior probability in the prediction, while the probability used before is the posterior probability after observing $y$. Since with prediction there is no observed $y$, so naturally we can only use the prior to calculate the expectation. The prediction standard error is also calculated numerically with the delta method, i.e.$ Var(\tilde y) = \frac{\partial \tilde y }{\partial \theta}^T Var(\hat\theta)\frac{\partial \tilde y }{\partial \theta}$.
@@ -85,7 +85,7 @@ $$
 where $\epsilon_{g,t}\sim N(0, \Sigma_g)$. Denote the group label of time $t$ as $z_t$, the group membership probability for time $t$ being in group $g$ is given by:
 
 $$
-P(z_t = g|P(z_{t-1} = x)\ \forall x\in G) = \frac{exp(\gamma_g X_t + \sum_{x = 1}^{G}\eta_{g,x} P(z_{t-1} = x))}{1+\sum_{g = 1}^{G-1}exp(\gamma_g X_t + \sum_{x = 1}^{G}\eta_{g,x} P(z_{t-1} = x)))}
+P(z_t = g|P(z_{t-1} = x)\ \forall x\in G) = \frac{exp(\gamma_g X_t + \sum_{x = 1}^{G}\eta_{g,x} P(z_{t-1} = x))} {1+\sum_{g = 1}^{G-1}exp(\gamma_g X_t + \sum_{x = 1}^{G}\eta_{g,x} P(z_{t-1} = x)))}
 $$
 
 Here, $\beta_g$ represents the coefficient for group $g$, and $\epsilon_{g,t}$ is the error term for time $t$ in group $g$.
