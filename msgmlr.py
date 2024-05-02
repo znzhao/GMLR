@@ -4,44 +4,122 @@ import warnings
 import tqdm
 import pandas as pd
 import numpy as np
-from typing import Literal
+from numba import njit
+from numba.np.unsafe import ndarray # essential to solve the bug in numba
 from matplotlib import pyplot
 from scipy.stats import norm
 from scipy.optimize import Bounds
 from scipy.optimize import minimize
 from sklearn.metrics import mean_squared_error
-from sklearn.utils import resample
 from IPython.display import clear_output
 from IPython import get_ipython
-from sklearn.linear_model import LogisticRegression
-from helper.utils import Timer, gradient
+from helper.utils import Timer, gradient, dot3d
+from data_generator import TSGenerator
 warnings.filterwarnings('ignore')
 
-class GMLR:
+
+@njit
+def unpackParams(thetas: np.array, cov: bool, const:bool, ngroup: int, nX: int, ny: int, ngammas: int, netas:int, nbetas:int, nsigmas:int, ncovs:int):
+    """
+    Unpacks the flattened parameter array into individual matrices for further use.
+    Parameters:
+    - thetas: Numpy array containing the parameters of the model.
+
+    Returns:
+    - Tuple of gammas, betas, and sigmas (parameters of the model).
+    """
+    if cov:
+        assert len(thetas) == ngammas + netas + nbetas + nsigmas + ncovs
+    else:
+        assert len(thetas) == ngammas + netas + nbetas + nsigmas
+
+    gammas = thetas[ : ngammas]
+    gammas = np.reshape(gammas, (ngroup-1, nX))
+    etas = thetas[ngammas : ngammas+netas]
+    etas = np.reshape(etas, (ngroup-1, ngroup-1 if const else ngroup))
+    betas = thetas[ngammas+netas : ngammas+netas+nbetas]
+    betas = np.reshape(betas, (ngroup, nX, ny))
+    sigmas = thetas[ngammas + netas + nbetas : ngammas + netas + nbetas + nsigmas]
+    sigmas = np.reshape(sigmas, (ngroup, ny))
+    sigmalist = [np.array(np.diag(sigmas[g])) for g in range(ngroup)]
+    sigmas = np.zeros((ngroup, ny, ny))
+    for g in range(ngroup):
+        sigmas[g,:,:] = sigmalist[g]
+
+    if cov and int(ny*(ny-1)/2)>0:
+        # lower trianglular decomposition factors
+        covs = thetas[ngammas + netas + nbetas + nsigmas : ngammas + netas + nbetas + nsigmas + ncovs]
+        covs = np.reshape(covs, (ngroup, int(ny*(ny-1)/2)))
+        for g in range(ngroup):
+            k = 0
+            for i in range(1, ny):
+                for j in range(0, i):
+                    sigmas[g, i, j] = covs[g, k]
+                    k += 1
+    
+    for g in range(ngroup):
+        sigmas[g] = sigmas[g].dot(sigmas[g].T)
+        
+    return gammas, etas, betas, sigmas
+
+@njit
+def update(X: np.array, y: np.array, thetas: np.array, cov: bool, const:bool, nobs: int, ngroup: int, 
+           nX: int, ny: int, ngammas: int, netas:int, nbetas:int, nsigmas:int, ncovs:int, init_guess = None):        
+    # use Bayes Rule to calculate the prior and the postior simultaneously for each state
+    if init_guess is None:
+        init_guess = np.zeros(shape=(1, ngroup - 1 if const else ngroup))
+    gammas, etas, betas, sigmas = unpackParams(thetas, cov, const, ngroup, nX, ny, ngammas, netas, nbetas, nsigmas, ncovs)
+    y = y.reshape(X.shape[0], ny)
+    ymtx = np.zeros((X.shape[0], ny, ngroup))
+    for g in range(ngroup):
+        ymtx[:,:,g] = y
+    err = ymtx - dot3d(X, betas)
+
+    lagP = init_guess
+    priors = np.zeros((nobs, ngroup))
+    postiors = np.zeros((nobs, ngroup))
+    for t in range(nobs):
+        denominator = 1 + np.sum(np.exp(X[t,:].dot(gammas.T) + lagP.dot(etas.T)))
+        nominator = np.hstack((np.exp(X[t,:].dot(gammas.T) + lagP.dot(etas.T)), np.ones((1, 1))))
+        prior = nominator / denominator
+        priors[t, :] = prior
+        pmtx = np.zeros((1, ngroup))
+        for g in range(ngroup):
+            # Probability that observation falls in the i-th group
+            curr_err = err[t,:,g][np.newaxis,:]
+            normalprob = np.exp(-1.0/2.0 * np.diag(curr_err.dot(np.linalg.inv(sigmas[g])).dot(curr_err.T)))
+            pval = prior[0, g] / np.sqrt(2.0*np.pi*np.linalg.det(sigmas[g])) * normalprob # ??????
+            pmtx[:, g] = pval
+        postior = pmtx / np.sum(pmtx, axis=1)
+        postiors[t, :] = postior
+        lagP = postior[:, :-1] if const else postior
+    return priors, postiors
+
+class MSGMLR:
     colormap = {0:'tab:blue', 1:'tab:orange', 2:'tab:green', 3:'tab:red', 4:'tab:blue', 
                 5:'tab:purple', 6:'tab:brown', 7:'tab:pink', 8:'tab:gray', 9:'tab:olive', 10:'tab:cyan'}
     def __init__(self, data: pd.DataFrame, ycol: list, Xcol: list, ngroup = 2, const = True, cov = False, alpha = 0, norm = 1):
         """
-        Initialize the Gaussian Mixture Linear Regression (GMLR) model with adjustable state-dependent probability.
+        Initialize the Markov Switching Gaussian Mixture Linear Regression (GMLR) model with adjustable state-dependent probability.
 
         Parameters:
-        - data: Pandas DataFrame containing the dataset.
+        - data: Pandas DataFrame containing the dataset. The index of the dataset should be the time index.
         - ycol: List of column names for the dependent variable(s).
         - Xcol: List of column names for the independent variable(s).
         - ngroup: Number of groups or states in the model.
         - const: Boolean indicating whether to include a constant term in the regression model.
         - cov: Boolean indicating whether to include a covariance term in the variance-covariance matrix.
         ---------------------------------------------------------------------------------------------
-        The GMLR class is designed for fitting and predicting a mixture model using the Expectation-Maximization (EM) algorithm.
-        To initialize the class, create an instance by providing a dataset in the form of a Pandas DataFrame (`data`), specifying the
-        column names for the dependent variables (`ycol`), independent variables (`Xcol`), the number of groups or states (`ngroup`),
-        and whether to include a constant term in the regression model (`const`). The instance is initialized with these parameters.
-        Once initialized, the `fit` method can be called to train the model using the EM algorithm. It takes optional parameters such as
-        `maxiter` (maximum number of iterations), `tol` (convergence tolerance), `disp` (display progress), `plot` (plotting the model
-        during training), `plotx` (x-axis variable for plotting), and `ploty` (y-axis variable for plotting). After fitting, the
-        `predict` method can be used to generate predictions for the dependent variable. If no independent variables are provided, it
-        uses the training data by default. Additionally, the `summary` method can be called to print a summary of the model parameters,
-        log-likelihood, and Bayesian Information Criterion (BIC). Below is an example of using this class:
+        The MSGMLR class is designed for fitting and predicting a mixture model for time series data using the Expectation-Maximization 
+        (EM) algorithm. To initialize the class, create an instance by providing a dataset in the form of a Pandas DataFrame (`data`), 
+        specifying the column names for the dependent variables (`ycol`), independent variables (`Xcol`), the number of groups or states
+        (`ngroup`), and whether to include a constant term in the regression model (`const`). The instance is initialized with these 
+        parameters. Once initialized, the `fit` method can be called to train the model using the EM algorithm. It takes optional 
+        parameters such as `maxiter` (maximum number of iterations), `tol` (convergence tolerance), `disp` (display progress), 
+        `plot` (plotting the model during training), `plotx` (x-axis variable for plotting), and `ploty` (y-axis variable for plotting).
+        After fitting, the `predict` method can be used to generate predictions for the dependent variable. If no independent variables
+        are provided, it uses the training data by default. Additionally, the `summary` method can be called to print a summary of the 
+        model parameters, log-likelihood, and Bayesian Information Criterion (BIC). Below is an example of using this class:
 
         Example Usage:
         ```
@@ -77,7 +155,6 @@ class GMLR:
         self.y = data[ycol].values
         self.ny = len(ycol)
         self.ycol = ycol
-        self.const = const
         self.X = np.hstack((data[Xcol].values, np.ones(shape=(self.nobs, 1)))) if const else data[Xcol].values
         self.nX = self.X.shape[1]
         self.Xcol = Xcol
@@ -86,57 +163,27 @@ class GMLR:
         self.nbetas = self.nX*self.ngroup*self.ny
         self.nsigmas = self.ngroup*self.ny
         self.ncovs = self.ngroup*int(self.ny*(self.ny-1)/2)
-        
+        self.netas = (self.ngroup-1)**2 if const else self.ngroup*(self.ngroup-1)
+
         self.slices = dict()
         self.slices['gammas'] = np.index_exp[:self.ngammas]
-        self.slices['betas'] = np.index_exp[self.ngammas: self.ngammas + self.nbetas]
-        self.slices['sigmas'] = np.index_exp[self.ngammas + self.nbetas: self.ngammas + self.nbetas + self.nsigmas]
-        self.slices['covs'] = np.index_exp[self.ngammas + self.nbetas + self.nsigmas: self.ngammas + self.nbetas + self.nsigmas + self.ncovs]
+        self.slices['etas']   = np.index_exp[self.ngammas: 
+                                             self.ngammas + self.netas]
+        self.slices['betas']  = np.index_exp[self.ngammas + self.netas:
+                                             self.ngammas + self.netas + self.nbetas]
+        self.slices['sigmas'] = np.index_exp[self.ngammas + self.netas + self.nbetas: 
+                                             self.ngammas + self.netas + self.nbetas + self.nsigmas]
+        self.slices['covs']   = np.index_exp[self.ngammas + self.netas + self.nbetas + self.nsigmas: 
+                                             self.ngammas + self.netas + self.nbetas + self.nsigmas + self.ncovs]
         
         self.cov = cov
         self.alpha = alpha
         self.norm = norm
-
+        self.const = const
 
     def __unpack(self, thetas: np.array):
-        """
-        Unpacks the flattened parameter array into individual matrices for further use.
+        return unpackParams(thetas, self.cov, self.const, self.ngroup, self.nX, self.ny, self.ngammas, self.netas, self.nbetas, self.nsigmas, self.ncovs)
 
-        Parameters:
-        - thetas: Numpy array containing the parameters of the model.
-
-        Returns:
-        - Tuple of gammas, betas, and sigmas (parameters of the model).
-        """
-        if self.cov:
-            assert len(thetas) == self.ngammas + self.nbetas + self.nsigmas + self.ncovs
-        else:
-            assert len(thetas) == self.ngammas + self.nbetas + self.nsigmas
-
-        gammas = thetas[self.slices['gammas']]
-        gammas = np.reshape(gammas, newshape=(self.ngroup-1, self.nX))
-        betas = thetas[self.slices['betas']]
-        betas = np.reshape(betas, newshape=(self.ngroup, self.nX, self.ny))
-        sigmas = thetas[self.slices['sigmas']]
-        sigmas = np.reshape(sigmas, newshape=(self.ngroup, self.ny))
-        sigmas = np.array([np.diag(sigmas[g]) for g in range(self.ngroup)])
-
-        if self.cov and int(self.ny*(self.ny-1)/2)>0:
-            # lower trianglular decomposition factors
-            covs = thetas[self.slices['covs']]
-            covs = np.reshape(covs, newshape=(self.ngroup, int(self.ny*(self.ny-1)/2)))
-            for g in range(self.ngroup):
-                k = 0
-                for i in range(1, self.ny):
-                    for j in range(0, i):
-                        sigmas[g, i, j] = covs[g, k]
-                        k += 1
-        
-        for g in range(self.ngroup):
-            sigmas[g] = sigmas[g].dot(sigmas[g].T)
-            
-        return gammas, betas, sigmas
-    
     def unpack(self, thetas: np.array):
         """
         Public interface to unpack the model parameters.
@@ -148,27 +195,12 @@ class GMLR:
         - Tuple of gammas, betas, and sigmas (parameters of the model).
         """
         return self.__unpack(thetas)
-    
-    def prior(self, X: np.array, thetas: np.array):
-        """
-        Computes the prior probabilities used in both E-step and M-step.
 
-        Parameters:
-        - X: Numpy array of independent variables.
-        - thetas: Numpy array containing the parameters of the model.
-
-        Returns:
-        - Matrix of prior probabilities for each observation belonging to each group.
-        """
-        gammas, betas, sigmas = self.__unpack(thetas)
-        # initialize pmtx
-        logit_denominator = 1 + np.sum(np.exp(X.dot(gammas.T)), axis = 1)
-        logit_denominator = np.repeat(logit_denominator[:, np.newaxis], repeats = self.ngroup, axis = 1)
-        logit_nominator = np.hstack((np.exp(X.dot(gammas.T)), np.ones((X.shape[0], 1))))
-        logit = logit_nominator / logit_denominator
-        return logit
+    def update(self, X: np.array, y: np.array, thetas: np.array, init_guess = None):
+        nobs = X.shape[0]
+        return update(X, y, thetas, self.cov, self.const, nobs, self.ngroup, self.nX, self.ny, self.ngammas, self.netas, self.nbetas, self.nsigmas, self.ncovs, init_guess)
     
-    def partialLik(self, X: np.array, y: np.array, thetas: np.array):
+    def partialLik(self, X: np.array, y: np.array, thetas: np.array, init_guess = None):
         """
         Computes the partial likelihood function for the model.
 
@@ -176,12 +208,13 @@ class GMLR:
         - X: Numpy array of independent variables.
         - y: Numpy array of dependent variables.
         - thetas: Numpy array containing the parameters of the model.
+        - probs: Numpy array of the prior probability.
 
         Returns:
         - Value of the partial likelihood function.
         """
-        gammas, betas, sigmas = self.__unpack(thetas)
-        logit = self.prior(X, thetas)
+        gammas, etas, betas, sigmas = self.__unpack(thetas)
+        priors, postiors = self.update(self.X, self.y, thetas, init_guess)
         y = y.reshape(X.shape[0], self.ny)
         ymtx = np.repeat(y[:, :, np.newaxis], self.ngroup, axis=2)
         err = ymtx - X.dot(betas.T)
@@ -190,28 +223,35 @@ class GMLR:
         for g in range(self.ngroup):
             # Probability that observation falls in the i-th group
             normalprob = np.exp(-1.0/2.0 * np.diag(err[:,:,g].dot(np.linalg.inv(sigmas[g])).dot(err[:,:,g].T)))
-            pval = logit[:,g] / np.sqrt(2.0*np.pi*np.linalg.det(sigmas[g])) * normalprob
+            pval = priors[:,g] / np.sqrt(2.0*np.pi*np.linalg.det(sigmas[g])) * normalprob
             pmtx.append(pval)
         return np.array(pmtx).T
-
-    def postior(self, X: np.array, y: np.array, thetas: np.array):
-        """
-        Implements the expectation step in the EM algorithm.
-
-        Parameters:
-        - X: Numpy array of independent variables.
-        - y: Numpy array of dependent variables.
-        - thetas: Numpy array containing the parameters of the model.
-
-        Returns:
-        - Matrix of updated probabilities according to Bayesian Rule.
-        """
-        # expectation step: for each observation, calculate the probability to fall in group G
-        prob = self.partialLik(X, y, thetas)
-        # update probability according to Bayesian Rule
-        return prob / np.repeat(prob.sum(axis=1)[:, np.newaxis], self.ngroup, axis=1)
     
-    def logLik(self, X: np.array, y: np.array, thetas: np.array, probs: np.array):
+    def filter(self, X: np.array, y: np.array, thetas: np.array, priors: np.array, postiors: np.array):
+        gammas, etas, betas, sigmas = self.__unpack(thetas)
+        nobs = X.shape[0]
+        probs = np.zeros(shape=(nobs, self.ngroup))
+        curr_smoothed_prob = probs[nobs-1,:] = postiors[-1,:]
+        for t in range(nobs-1):
+            pt = nobs-t-1
+            lagPs = np.zeros((self.ngroup, self.ngroup-1)) if self.const else np.zeros((self.ngroup, self.ngroup))
+            for g in range(self.ngroup-1 if self.const else self.ngroup):
+                lagPs[g, g] = 1
+            wedge = np.zeros(self.ngroup)
+            Ptrans = np.zeros((self.ngroup, self.ngroup))
+            for g in range(self.ngroup):
+                lagP = lagPs[g, :]
+                denominator = 1 + np.sum(np.exp(X[pt,:].dot(gammas.T) + lagP.dot(etas.T)))
+                nominator = np.hstack((np.exp(X[pt,:].dot(gammas.T) + lagP.dot(etas.T)), np.ones((1))))
+                Ptrans[g,:] = nominator / denominator  # used in the nominator
+            for g in range(self.ngroup):
+                bottom = np.array([sum(Ptrans[:,x] * postiors[pt-1, :]) for x in range(self.ngroup)])
+                wedge[g] = np.sum(Ptrans[g] * curr_smoothed_prob / bottom)
+            curr_smoothed_prob = probs[pt-1] = wedge * postiors[pt-1, :]
+        return probs
+            
+    
+    def logLik(self, X: np.array, y: np.array, thetas: np.array, postiors: np.array, init_guess = None):
         """
         Computes the log-likelihood function.
 
@@ -219,13 +259,15 @@ class GMLR:
         - X: Numpy array of independent variables.
         - y: Numpy array of dependent variables.
         - thetas: Numpy array containing the parameters of the model.
-        - probs: Numpy array containing probabilities.
+        - probs: Numpy array containing postior probabilities.
 
         Output:
         - Log-likelihood value.
         """
         # take expectation of the log-likilihood function
-        loglik = np.sum(probs * np.log(self.partialLik(X, y, thetas)))
+        loglik = np.log(self.partialLik(X, y, thetas, init_guess))
+        label = loglik == -np.inf
+        loglik = np.sum(postiors * loglik)
         return loglik
 
     def penalty(self, thetas: np.array):
@@ -250,9 +292,9 @@ class GMLR:
         """
         # initialize the first guess as the OLS regression beta using only a slice of the data
         if self.cov:
-            guess = np.zeros(self.ngammas + self.nbetas + self.nsigmas + self.ncovs)
+            guess = np.zeros(self.ngammas + self.netas + self.nbetas + self.nsigmas + self.ncovs)
         else:
-            guess = np.zeros(self.ngammas + self.nbetas + self.nsigmas)
+            guess = np.zeros(self.ngammas + self.netas + self.nbetas + self.nsigmas)
 
         betas = []
         covs = []
@@ -284,8 +326,9 @@ class GMLR:
             pyplot.ion()
             fig, ax = pyplot.subplots(1, 1, figsize = (16,8)) 
         for stepi in range(maxiter):
-            postiors = self.postior(self.X, self.y, thetas)
-            res = minimize(lambda thetas: -self.logLik(inputX, inputy, thetas, postiors) + self.alpha * self.penalty(thetas), 
+            priors, postiors = self.update(self.X, self.y, thetas)
+            smoothed = self.filter(self.X, self.y, thetas, priors, postiors)
+            res = minimize(lambda thetas: -self.logLik(inputX, inputy, thetas, smoothed) + self.alpha * self.penalty(thetas), 
                            thetas, method = 'SLSQP', bounds=bnds, options={'disp': False})
             gap = np.sum(np.abs(res.x - thetas))
             thetas = res.x
@@ -313,32 +356,13 @@ class GMLR:
         loglikval = self.logLik(inputX, inputy, thetas, postiors)
         end = time.time()
         print('[EM Estimation]\t Completed in {:.4f} seconds.'.format(end-start)) if disp else None
+        
         return thetas, loglikval, flag
     
     def bootstrapFit(self, nboot = 100, maxiter = 100, tol = 1e-4, disp = True):
-        """
-        Perform bootstrapping to estimate parameters.
-
-        Args:
-        - nboot: Number of bootstrapping iterations.
-        - maxiter: Maximum number of iterations for each bootstrapped EM estimation.
-        - tol: Tolerance for convergence.
-        - disp: Boolean indicating whether to display progress.
-
-        Returns:
-        - Numpy array of bootstrapped parameter estimates.
-        """
-        boot_thetas = []
-        print('Bootstrapping Model Fit Started...') if disp else None        
-        with Timer('Bootstrapping', display=disp):
-            for booti in tqdm.trange(nboot, disable = not disp, desc = 'Bootstrapping', leave = False):
-                bootstrap_data = resample(self.X, self.y, n_samples = self.nobs, replace = True)
-                Xs, ys = bootstrap_data[0], bootstrap_data[1]
-                thetas, loglikval, flag = self.modelFit(Xs, ys, maxiter = maxiter, tol = tol, disp = False, plot = False)
-                boot_thetas.append(thetas)
-        return np.vstack(boot_thetas)
+        raise NotImplementedError
     
-    def hessian(self, X: np.array, y: np.array, thetas: np.array, probs: np.array):
+    def hessian(self, X: np.array, y: np.array, thetas: np.array, postiors: np.array):
         """
         Compute the Hessian matrix.
 
@@ -351,30 +375,12 @@ class GMLR:
         Returns:
         - Computed Hessian matrix.
         """
-        loglik_gradient = gradient(thetas, lambda thetas: np.sum(probs * np.log(self.partialLik(X, y, thetas)), axis=1) )
+        loglik_gradient = gradient(thetas, lambda thetas: np.sum(postiors * np.log(self.partialLik(X, y, thetas)), axis=1) )
         hex = np.zeros((len(thetas), len(thetas)))
         for i in range(self.nobs):
             hex += loglik_gradient[:,i][:, np.newaxis].dot(loglik_gradient[:,i][:, np.newaxis].T)
         return hex/self.nobs
 
-    def targetBayes(self, phis:np.array, prior: np.array, postior: np.array):
-        phis = np.reshape(phis, (self.ngroup-1, self.ngroup))
-        probs = np.hstack([np.exp(phis.dot(prior.T)).T, np.ones((prior.shape[0], 1))])
-        probs = probs / np.repeat(np.sum(probs, axis=1)[:, np.newaxis], self.ngroup, axis=1)
-        return np.sum((probs - postior)**2)
-    
-    def solveBayes(self, prior: np.array, postior: np.array):
-        phis = np.zeros((self.ngroup-1, self.ngroup))
-        res = minimize(lambda phis: self.targetBayes(phis, prior, postior), phis[:], options={'disp': False})
-        phis = np.reshape(res.x, (self.ngroup-1, self.ngroup))
-        return phis
-
-    def bayes(self, phis:np.array, prior: np.array):
-        phis = np.reshape(phis, (self.ngroup-1, self.ngroup))
-        probs = np.hstack([np.exp(phis.dot(prior.T)).T, np.ones((prior.shape[0], 1))])
-        probs = probs / np.repeat(np.sum(probs, axis=1)[:, np.newaxis], self.ngroup, axis=1)
-        return probs
-    
     def fit(self, maxiter = 100, tol = 1e-4, boot = False, nboot = 100, disp = True, plot = True, plotx = None, ploty = None):
         """
         Main fitting function.
@@ -400,13 +406,11 @@ class GMLR:
         self.thetas = thetas
         self.loglikval = loglikval
         self.flag = flag
-        priors = self.prior(self.X, thetas)
-        postiors = self.postior(self.X, self.y, thetas)
-        self.phis = self.solveBayes(priors, postiors)
-        
-        hex = self.hessian(self.X, self.y, thetas, postiors)
+        priors, postiors = self.update(self.X, self.y, thetas)
+        smoothed = self.filter(self.X, self.y, thetas, priors, postiors)
+        hex = self.hessian(self.X, self.y, thetas, smoothed)
         self.varthetas = np.linalg.inv(hex)/(self.nobs - len(thetas))
-        self.bicval = self.bic(loglikval, thetas, postiors)
+        self.bicval = self.bic(loglikval, thetas, smoothed)
         return thetas
     
     def deltaMethod(self, thetas: np.array, varthetas: np.array):
@@ -420,7 +424,7 @@ class GMLR:
         Output:
         - BIC value.
         """
-        delta = gradient(thetas, lambda thetas: self.__unpack(thetas)[-1])
+        delta = gradient(thetas, lambda thetas: self.__unpack(thetas)[-1])   ### ?
         if self.cov:
             delta = np.concatenate([delta[self.slices['sigmas']], delta[self.slices['covs']]], axis = 0)  
         else:
@@ -449,70 +453,76 @@ class GMLR:
         bicval = Ktheta*logN - 2*loglik
         return bicval
     
-    def __predFunc(self, xi: int, X: np.array, thetas: np.array, mode: Literal['prior', 'postior']):
+    def __predFunc(self, X: np.array, smoothed: np.array, thetas: np.array, init_guess = None):
         guess = np.zeros(shape = (1, self.ny))
-        priors = self.prior(X[xi,:][np.newaxis,:], thetas)
-        if mode == 'prior':
-            res = minimize(lambda y: -self.logLik(X[xi,:][np.newaxis,:], y, thetas, priors), 
-                        guess, method = 'SLSQP', options={'disp': False})
-            return res.x
-        if mode == 'postior':
-            postiors = self.bayes(self.phis, priors)
-            groupid = np.argmax(postiors, axis=1)[0]
-            gammas, betas, sigmas = self.__unpack(thetas)
-            return X[xi,:].dot(betas[groupid]) 
+        res = minimize(lambda y: -self.logLik(X, y, thetas, smoothed, init_guess), 
+                       guess, method = 'SLSQP', options={'disp': False})
+        return res.x
     
-    def predict(self, X: pd.DataFrame = None, disp = True, lb = 0.05, ub = 0.95, mode: Literal['prior', 'postior'] = 'prior'):
+    def __predFuncOOS(self, X: np.array, postiors: np.array, thetas: np.array, init_guess = None):
+        guess = np.zeros(shape = (1, self.ny))
+        res = minimize(lambda y: -self.logLik(X, y, thetas, postiors, init_guess), 
+                       guess, method = 'SLSQP', options={'disp': False})
+        return res.x
+
+    def predict(self, X: pd.DataFrame = None, disp = True):
         """
         Generates predictions using the trained model.
 
         Input:
-        - X: Pandas dataframe of independent variables (optional, default is None, which uses the training data).
-        - disp: display options
-        - mode: 'prior' or 'postior' prediction method. Default is prior.
+        - X: Pandas Dataframe of independent variables (optional, default is None, which uses the training data).
 
         Output:
         - Numpy array of predicted values for the dependent variable.
         """
-        X = self.X if X is None else X
-        if type(X) is pd.DataFrame:
-            X = np.hstack((X[self.Xcol].values, np.ones(shape=(X.shape[0], 1)))) if self.const else X[self.Xcol].values
+        if self.boot:
+            raise NotImplementedError
+        
         y = []
         stds = []
-        print('Model Prediction Started...')
-
-        with Timer('Model Prediction'):
-            for xi in tqdm.trange(X.shape[0], disable = not disp, desc = 'Model Prediction', leave = False):
-                yi = self.__predFunc(xi, X, self.thetas, mode)
-                gradyi = gradient(self.thetas, lambda thetas: self.__predFunc(xi, X, thetas, mode))
-                predvars = gradyi.T.dot(self.varthetas).dot(gradyi)
-                y.append(yi)
-                stds.append(np.sqrt(np.diag(predvars)))
-            preds = np.array(y)
-            stds = np.array(stds)
-        
-        if not self.boot:
-            return preds, stds
-        print('Bootstrapping Prediction Started...') if disp else None
-        start = time.time()
-        bootpreds = []
-        for booti in tqdm.trange(self.boot_thetas.shape[0], disable = not disp, desc = 'Bootstrapping', leave = False):
-            booty = []
-            for xi in range(X.shape[0]):
-                guess = np.zeros(shape = (1, self.ny))
-                priors = self.prior(X[xi,:][np.newaxis,:], self.boot_thetas[booti,:])
-                res = minimize(lambda y: -self.logLik(X[xi,:][np.newaxis,:], y, self.boot_thetas[booti,:], priors), 
-                            guess, method = 'SLSQP', options={'disp': False})
-                yi = res.x
-                booty.append(yi)
-            bootpreds.append(np.array(booty).reshape((1, np.array(booty).size)))
-        end = time.time()
-        print('Bootstrap Completed in {:.4f} seconds.'.format(end-start)) if disp else None
-        bootpreds = np.vstack(bootpreds)
-        stds = np.std(bootpreds, axis=0).reshape(preds.shape)
-        lbs = np.percentile(bootpreds, q = lb, axis=0).reshape(preds.shape)
-        ubs = np.percentile(bootpreds, q = ub, axis=0).reshape(preds.shape)
-        return preds, stds, lbs, ubs
+        if X is None:
+            X = self.X
+            print('Model In-Sample Prediction Started...')
+            with Timer('Model Prediction'):
+                priors, postiors = self.update(self.X, self.y, self.thetas)
+                smoothed = self.filter(self.X, self.y, self.thetas, priors, postiors)
+                for xi in tqdm.trange(X.shape[0], disable = not disp, desc = 'Model Prediction', leave = False):
+                    init_guess = (smoothed[xi-1,:][np.newaxis,:-1] if self.const else smoothed[xi-1,:][np.newaxis,:]) if xi>0 else None
+                    yi = self.__predFunc(X[xi,:][np.newaxis,:], priors[xi,:][np.newaxis,:], self.thetas, init_guess)                    
+                    gradyi = gradient(self.thetas, lambda thetas: self.__predFunc(X[xi,:][np.newaxis,:], priors[xi,:][np.newaxis,:], thetas, init_guess))
+                    predvars = gradyi.T.dot(self.varthetas).dot(gradyi)
+                    y.append(yi)
+                    stds.append(np.sqrt(np.diag(predvars)))
+                preds = np.array(y)
+                stds = np.array(stds)
+        else:
+            if type(X) is pd.DataFrame:
+                X = np.hstack((X[self.Xcol].values, np.ones(shape=(X.shape[0], 1)))) if self.const else X[self.Xcol].values
+            print('Model Out-Of-Sample Prediction Started...')
+            with Timer('Model Prediction'):
+                priors, postiors = self.update(self.X, self.y, self.thetas)
+                smoothed = self.filter(self.X, self.y, self.thetas, priors, postiors)
+                curr_prob = smoothed[-1,:][np.newaxis,:-1] if self.const else smoothed[xi-1,:][np.newaxis,:]
+                for xi in tqdm.trange(X.shape[0], disable = not disp, desc = 'Model Prediction', leave = False):
+                    init_guess = curr_prob
+                    # calculate the probability used in calculating the out-of-sample prediction
+                    gammas, etas, betas, sigmas = self.__unpack(self.thetas)
+                    denominator = 1 + np.sum(np.exp(X[xi,:][np.newaxis,:].dot(gammas.T) + init_guess.dot(etas.T)))
+                    nominator = np.hstack((np.exp(X[xi,:][np.newaxis,:].dot(gammas.T) + init_guess.dot(etas.T)), np.ones((1, 1))))
+                    prior = nominator / denominator
+                    # do out-of-sample prediction
+                    yi = self.__predFuncOOS(X[xi,:][np.newaxis,:], prior, self.thetas, init_guess)          
+                    gradyi = gradient(self.thetas, lambda thetas: self.__predFuncOOS(X[xi,:][np.newaxis,:], prior, self.thetas, init_guess))
+                    predvars = gradyi.T.dot(self.varthetas).dot(gradyi)
+                    y.append(yi)
+                    stds.append(np.sqrt(np.diag(predvars)))
+                    priors, postiors = self.update(X[xi,:][np.newaxis,:], yi[np.newaxis,:], self.thetas, init_guess)
+                    smoothed = self.filter(X[xi,:][np.newaxis,:], yi[np.newaxis,:], self.thetas, priors, postiors)
+                    curr_prob = smoothed[-1,:][np.newaxis,:-1] if self.const else smoothed[xi-1,:][np.newaxis,:]
+                    
+                preds = np.array(y)
+                stds = np.array(stds)
+        return preds, stds
 
     def plot(self, thetas, x, y, ax = None, figsize = (16,8), truelabel = None, show = True):
         """
@@ -526,13 +536,16 @@ class GMLR:
 
         Output: None
         """
-        gammas, betas, sigmas = self.__unpack(thetas)
+        gammas, etas, betas, sigmas = self.__unpack(thetas)
         if ax is None:
             fig, ax = pyplot.subplots(1, 1, figsize = figsize) 
+        if truelabel in self.data.columns: ax.scatter(self.data[x], self.data[y], c = [self.colormap[c+2] for c in self.data['z']], marker='x')
         ls = []
+        priors, postiors = self.update(self.X, self.y, thetas)
+        smoothed = self.filter(self.X, self.y, thetas, priors, postiors)
         for g in range(self.ngroup):
-            ax.scatter(self.data[x][np.argmax(self.postior(self.X, self.y, thetas), axis=1) == g], 
-                   self.data[y][np.argmax(self.postior(self.X, self.y, thetas), axis=1) == g], 
+            ax.scatter(self.data[x][np.argmax(smoothed, axis=1) == g], 
+                   self.data[y][np.argmax(smoothed, axis=1) == g], 
                    color = self.colormap[g], label = 'state '+str(g)+ ' data')
             xaxis = np.linspace(self.data[x].min() - 0.05*(self.data[x].max() - self.data[x].min()), 
                                 self.data[x].max() + 0.05*(self.data[x].max() - self.data[x].min()), 10)
@@ -548,7 +561,6 @@ class GMLR:
                             intercept + beta.loc[y, x]*xaxis - 1.96 * np.sqrt(sigma.loc[y,y]), alpha = 0.2, color = self.colormap[g])
             ax.fill_between(xaxis, intercept + beta.loc[y, x]*xaxis + 1.68 * np.sqrt(sigma.loc[y,y]),
                             intercept + beta.loc[y, x]*xaxis - 1.68 * np.sqrt(sigma.loc[y,y]), alpha = 0.4, color = self.colormap[g])
-        if truelabel in self.data.columns: ax.scatter(self.data[x], self.data[y], c = [self.colormap[c+2] for c in self.data[truelabel]], marker='x', s = 10)
         ax.legend(frameon = False, fontsize = 12, loc = 'upper left', ncol = self.ngroup)
         [ax.spines[loc_axis].set_visible(False) for loc_axis in ['top','right', 'bottom']]
         ax.tick_params(axis='both', which='major', labelsize=10)
@@ -556,9 +568,9 @@ class GMLR:
         ax.set_ylabel(y, fontsize=12)
         ax.set_title('Scatter ' + x + '-' + y, fontsize=14)
         if show: pyplot.show()
-        return None
+        return None if show else ax
 
-    def plotMSE(self, y, figsize = (16,8), showci = True, alpha = 0.1, show = True, mode: Literal['prior', 'postior'] = 'prior'):
+    def plotMSE(self, y, figsize = (16,8), showci = True, alpha = 0.1, show = True):
         """
         Plots the true data points against predicted data points with Mean Squared Error information.
 
@@ -569,12 +581,9 @@ class GMLR:
         Output: None
         """
         if self.boot:
-            ypred, stds, lbs, ubs = self.predict()
-            stds = pd.DataFrame(stds, columns=self.ycol)
-            lbs = pd.DataFrame(lbs, columns=self.ycol)
-            ubs = pd.DataFrame(ubs, columns=self.ycol)
+            raise NotImplementedError
         else:
-            ypred, stds = self.predict(mode = mode)
+            ypred, stds = self.predict()
         
         ypred = pd.DataFrame(ypred, columns=self.ycol)
         stds = pd.DataFrame(stds, columns=self.ycol)
@@ -585,32 +594,23 @@ class GMLR:
         ax.plot(line45, line45, '--', color = 'black')
         for g in range(self.ngroup):
             if self.boot:
-                lbg = lbs[y][np.argmax(self.prior(self.X, thetas=self.thetas), axis = 1) == g]
-                ubg = ubs[y][np.argmax(self.prior(self.X, thetas=self.thetas), axis = 1) == g]
-                avg = (lbg.values + ubg.values)/2
-                ax.scatter(self.data[y][np.argmax(self.prior(self.X, thetas=self.thetas), axis = 1) == g],
-                           ypred[y][np.argmax(self.prior(self.X, thetas=self.thetas), axis = 1) == g], 
-                           s = 5, alpha = 0.5, color = self.colormap[g], label = 'state '+str(g))
-                if showci:
-                    ax.errorbar(x = self.data[y][np.argmax(self.prior(self.X, thetas=self.thetas), axis = 1) == g], y = avg, 
-                                yerr = np.vstack([avg.reshape((1, avg.size)) - lbg.values.reshape((1, lbg.size)), 
-                                                ubg.values.reshape((1, ubg.size)) - avg.reshape((1, avg.size))]),
-                                marker = None, color = self.colormap[g], label = 'state ' + str(g) + 'Bootstrapped CI',
-                                elinewidth=2, capsize=3, linewidth = 0)
+                raise NotImplementedError
             else:
-                lbg = lbs[y][np.argmax(self.prior(self.X, thetas=self.thetas), axis = 1) == g]
-                ubg = ubs[y][np.argmax(self.prior(self.X, thetas=self.thetas), axis = 1) == g]
+                priors, postiors = self.update(self.X, self.y, thetas)
+                smoothed = self.filter(self.X, self.y, thetas, priors, postiors)
+                lbg = lbs[y][np.argmax(smoothed, axis = 1) == g]
+                ubg = ubs[y][np.argmax(smoothed, axis = 1) == g]
                 avg = (lbg.values + ubg.values)/2
                 if showci:
-                    ax.errorbar(x = self.data[y][np.argmax(self.prior(self.X, thetas=self.thetas), axis = 1) == g],
-                                y = ypred[y][np.argmax(self.prior(self.X, thetas=self.thetas), axis = 1) == g],
+                    ax.errorbar(x = self.data[y][np.argmax(smoothed, axis = 1) == g],
+                                y = ypred[y][np.argmax(smoothed, axis = 1) == g],
                                 yerr = np.vstack([avg.reshape((1, avg.size)) - lbg.values.reshape((1, lbg.size)), 
                                                 ubg.values.reshape((1, ubg.size)) - avg.reshape((1, avg.size))]),
                                 marker = 'o', color = self.colormap[g], label = 'state '+str(g)+ ' {:d}'.format(int(100*(1-alpha/2.0)))+ '%CI',
                                 elinewidth=2, capsize=3, linewidth = 0)
                 else:
-                    ax.scatter(self.data[y][np.argmax(self.prior(self.X, thetas=self.thetas), axis = 1) == g],
-                               ypred[y][np.argmax(self.prior(self.X, thetas=self.thetas), axis = 1) == g], 
+                    ax.scatter(self.data[y][np.argmax(smoothed, axis = 1) == g],
+                               ypred[y][np.argmax(smoothed, axis = 1) == g], 
                                color = self.colormap[g], label = 'state '+str(g))
                 
         [ax.spines[loc_axis].set_visible(False) for loc_axis in ['top','right', 'bottom']]
@@ -626,8 +626,8 @@ class GMLR:
         """
         Prints a summary of the model parameters, log-likelihood, and BIC.
         """
-        gammas, betas, sigmas = self.__unpack(self.thetas)
-        gammastds, betastds, _ = self.__unpack(np.sqrt(np.diag(self.varthetas)))
+        gammas, etas, betas, sigmas = self.__unpack(self.thetas)
+        gammastds, etastds, betastds, _ = self.__unpack(np.sqrt(np.diag(self.varthetas)))
         varcov_vecs = self.deltaMethod(self.thetas, self.varthetas)
         sigmastds = np.sqrt(varcov_vecs)
         print('#'+'-'*91+'#')
@@ -638,11 +638,19 @@ class GMLR:
         print(' '*5+'Param Num:'.ljust(20), '{}'.format(len(self.thetas)).ljust(30), 'DF:'.ljust(20), '{}'.format(self.nobs - len(self.thetas)).ljust(20))
         print(' '*5+'Log-lik:'.ljust(20), '{:.4f}'.format(self.loglikval).ljust(30), 'BIC:'.ljust(20), '{:.4f}'.format(self.bicval).ljust(20))
         print('\n')
-        print('Gamma: Logit Regression Coefficients')
+        print('Gamma & Eta: Logit Regression Coefficients')
         gammas = pd.DataFrame(gammas, index = ['state '+str(x) for x in range(self.ngroup-1)], columns = self.Xcol + ['Const'])
         gammastds = pd.DataFrame(gammastds, index = ['state '+str(x) for x in range(self.ngroup-1)], columns = self.Xcol + ['Const'])
         gammapvals = pd.DataFrame(norm.cdf(-np.abs(gammas.values/gammastds.values))*2, 
                                   index = ['state '+str(x) for x in range(self.ngroup-1)], columns = self.Xcol + ['Const'])
+        eta_cols = ['P(L.state '+str(x)+')' for x in range(self.ngroup-1 if self.const else self.ngroup)]
+        etas = pd.DataFrame(etas, index = ['state '+str(x) for x in range(self.ngroup-1)],
+                            columns = eta_cols)
+        etastds = pd.DataFrame(etastds, index = ['state '+str(x) for x in range(self.ngroup-1)], 
+                               columns = eta_cols)
+        etapvals = pd.DataFrame(norm.cdf(-np.abs(etas.values/etastds.values))*2, 
+                                index = ['state '+str(x) for x in range(self.ngroup-1)], 
+                                columns = eta_cols)
 
         for index, row in gammas.iterrows():
             print('='*93)
@@ -653,12 +661,25 @@ class GMLR:
                   'std err'.center(20), '|',  
                   'p value'.center(20), '|')
             print('-'*93)
-            for col in gammas.columns:
+            for col in self.Xcol:
                 print('|', '{:^10s}'.format(col).center(20), '|', 
                       '{:.4f}'.format(row[col]).center(20), '|',  
                       '{:.4f}'.format(gammastds.loc[index, col]).center(20), '|',
                       '{:.4f}'.format(gammapvals.loc[index, col]).center(20), '|',
                       )
+            for col in eta_cols:
+                print('|', '{:^10s}'.format(col).center(20), '|', 
+                      '{:.4f}'.format(etas.loc[index, col]).center(20), '|',  
+                      '{:.4f}'.format(etastds.loc[index, col]).center(20), '|',
+                      '{:.4f}'.format(etapvals.loc[index, col]).center(20), '|',
+                      )
+            col = 'Const'
+            print('|', '{:^10s}'.format(col).center(20), '|', 
+                  '{:.4f}'.format(gammas.loc[index, col]).center(20), '|',  
+                  '{:.4f}'.format(gammastds.loc[index, col]).center(20), '|',
+                  '{:.4f}'.format(gammapvals.loc[index, col]).center(20), '|',
+                  )
+        
         print('='*93)
         print('\n')
         print('Beta: Main Model Regression Coefficients')
@@ -714,27 +735,30 @@ class GMLR:
 
 if __name__ == "__main__":
     # test package
-    from data_generator import PanelGenerator
-    from sklearn.model_selection import train_test_split
-    from sklearn.linear_model import LinearRegression
-    mses = dict()
-    data = PanelGenerator(Xrange=(-3,3), seed = 2)
+    data = TSGenerator(nX=2, ny = 2, Xrange=(-3, 3))
     data.summary()
-    train, test = train_test_split(data.data, test_size = 0.2)
+    msgmlr = MSGMLR(data.data, ycol=data.ycol, Xcol=data.Xcol, alpha=0, ngroup=2, cov=True)
+    thetas = msgmlr.fit(maxiter=200, disp=True, plot=True, boot = False)
+    priors, postiors = msgmlr.update(msgmlr.X, msgmlr.y, thetas)
+    smoothed = msgmlr.filter(msgmlr.X, msgmlr.y, thetas, priors, postiors)
+    label = smoothed[:,0] if np.mean((smoothed[:,0] - data.g)**2) < np.mean((smoothed[:,0] - 1 + data.g)**2) else 1-smoothed[:,0]
+
+    # plot the state graph
+    fig, ax = pyplot.subplots(1, 1, figsize = (16,8))
+    ax.plot(data.data.index, data.g, label = 'True Probability')
+    ax.plot(data.data.index, label, label = 'Smoothed Probability')
+    [ax.spines[loc_axis].set_visible(False) for loc_axis in ['top','right', 'bottom']]
+    ax.tick_params(axis='both', which='major', labelsize=10)
+    ax.legend(frameon = False, fontsize = 12, loc = 'upper left')
+    ax.set_xlabel('True Data', fontsize=12)
+    ax.set_ylabel('Pred Data', fontsize=12)
+    ax.set_title('Smoothed Probability vs True Probability of being in state 1', fontsize=14)
+    pyplot.show()
     
-    # baseline regression
-    lr = LinearRegression().fit(X = train[data.Xcol], y = train[data.ycol])
-    predslr = lr.predict(test[data.Xcol])
-    mses['lr'] = mean_squared_error(test[data.ycol], predslr, multioutput = 'raw_values')
-
-    # GMLR regression
-    gmlr = GMLR(train, ycol=data.ycol, Xcol=data.Xcol, alpha=0, ngroup=2, cov=True)
-    thetas = gmlr.fit(maxiter=200, disp=True, plot=True, boot = False)
-    gmlr.summary()
-    gmlr.plot(thetas, x = data.Xcol[0], y = data.ycol[0], truelabel = 'group', show = True)
-    gmlr.plotMSE(y = 'y1')
-
-    # Prediction
-    predsglmr, _ = gmlr.predict(test)
-    mses['gmlr'] = mean_squared_error(test[data.ycol], predsglmr, multioutput = 'raw_values')
-    print(mses)
+    # model results and prediction
+    msgmlr.summary()
+    msgmlr.plotMSE(y = 'y1')
+    oosX = data.data[data.Xcol].iloc[:10,:].values
+    oosX = np.hstack((oosX, np.ones(shape=(oosX.shape[0], 1))))
+    predys, predsds = msgmlr.predict(X=oosX)
+    print(predys)

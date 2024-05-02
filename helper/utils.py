@@ -1,7 +1,9 @@
 import os
 import time
 import numpy as np
+import numba as nb
 import datetime
+from numba import njit
 
 class Timer(object):
     def __init__(self, name=None, display = True):
@@ -131,6 +133,81 @@ def calSortino(data):
     PnLs = calPnLs(data)
     err = sortinoErr(data)
     return PnLs / err
+
+@nb.extending.overload(np.array)
+def np_array_ol(x):
+    """Numba JIT-compiled function for deep copying arrays."""
+    if isinstance(x, nb.types.Array):
+        def impl(x):
+            return np.copy(x)
+        return impl
+
+def pyObjToNumbaObj(pyObj):
+    if type(pyObj)==dict:
+        pyDict=pyObj
+        keys=list(pyDict.keys())
+        values=list(pyDict.values())
+        if type(keys[0]) == str:nbhKeytype = nb.types.string
+        elif type(keys[0]) == int:nbhKeytype = nb.types.int32
+        elif type(keys[0]) == float: nbhKeytype = nb.types.float32
+        if type(values[0])==int:
+            nbh=nb.typed.Dict.empty(nbhKeytype,nb.types.int32)
+            for i,key in enumerate(keys):nbh[key]=values[i]
+            return(nbh)
+        elif type(values[0])==str:
+            nbh=nb.typed.Dict.empty(nbhKeytype,nb.types.string)
+            for i,key in enumerate(keys):nbh[key]=values[i]
+            return(nbh)
+        elif type(values[0]) == float:
+            nbh=nb.typed.Dict.empty(nbhKeytype,nb.types.float32)
+            for i,key in enumerate(keys):nbh[key]=values[i]
+            return(nbh)
+        elif type(values[0])==dict:
+            for i,subDict in enumerate(values):
+                subDict=pyObjToNumbaObj(subDict)
+                if i==0:nbh=nb.typed.Dict.empty(nbhKeytype,nb.typeof(subDict))
+                nbh[keys[i]]=subDict
+            return(nbh)
+        elif type(values[0])==list:
+            for i, subList in enumerate(values):
+                subList=pyObjToNumbaObj(subList)
+                if i==0:nbh=nb.typed.Dict.empty(nbhKeytype,nb.typeof(subList))
+                nbh[keys[i]] = subList
+            return(nbh)
+    elif type(pyObj)==list:
+        pyList=pyObj
+        data = pyList[0]
+        if type(data) == int:
+            nbs = nb.typed.List.empty_list(nb.types.int32)
+            for data_ in pyList: nbs.append(data_)
+            return (nbs)
+        elif type(data) == str:
+            nbs = nb.typed.List.empty_list(nb.types.string)
+            for data_ in pyList: nbs.append(data_)
+            return (nbs)
+        elif type(data) == float:
+            nbs = nb.typed.List.empty_list(nb.types.float32)
+            for data_ in pyList: nbs.append(data_)
+            return (nbs)
+        elif type(data) == dict:
+            for i,subDict in enumerate(pyList):
+                subDict = pyObjToNumbaObj(subDict)
+                if i == 0: nbs = nb.typed.List.empty_list(nb.typeof(subDict))  
+                nbs.append(subDict)
+            return(nbs)
+        elif type(data) == list:
+            for i,subList in enumerate(pyList):
+                subList=pyObjToNumbaObj(subList)
+                if i==0: nbs = nb.typed.List.empty_list(nb.typeof(subList))  
+                nbs.append(subList)
+            return(nbs)
+
+@njit
+def dot3d(X: np.array, betas: np.array):
+    res = np.zeros((X.shape[0], betas.shape[2], betas.shape[0]))
+    for g in range(betas.shape[0]):
+        res[:,:,g] = X.dot(betas[g])
+    return res
 
 if __name__ == "__main__":
     print('Data Tools loaded.')
