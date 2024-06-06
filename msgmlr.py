@@ -13,7 +13,8 @@ from scipy.optimize import minimize
 from sklearn.metrics import mean_squared_error
 from IPython.display import clear_output
 from IPython import get_ipython
-from helper.utils import Timer, gradient, dot3d
+from gmlr import CombinedDistr
+from helper.utils import Timer, gradient, dot3d, colormap
 from data_generator import TSGenerator
 warnings.filterwarnings('ignore')
 
@@ -96,8 +97,6 @@ def update(X: np.array, y: np.array, thetas: np.array, cov: bool, const:bool, no
     return priors, postiors
 
 class MSGMLR:
-    colormap = {0:'tab:blue', 1:'tab:orange', 2:'tab:green', 3:'tab:red', 4:'tab:blue', 
-                5:'tab:purple', 6:'tab:brown', 7:'tab:pink', 8:'tab:gray', 9:'tab:olive', 10:'tab:cyan'}
     def __init__(self, data: pd.DataFrame, ycol: list, Xcol: list, ngroup = 2, const = True, cov = False, alpha = 0, norm = 1):
         """
         Initialize the Markov Switching Gaussian Mixture Linear Regression (GMLR) model with adjustable state-dependent probability.
@@ -324,7 +323,7 @@ class MSGMLR:
         gap = np.inf
         if (not get_ipython()) and plot:
             pyplot.ion()
-            fig, ax = pyplot.subplots(1, 1, figsize = (16,8)) 
+            fig, ax = pyplot.subplots(1, 1, figsize = (14,8)) 
         for stepi in range(maxiter):
             priors, postiors = self.update(self.X, self.y, thetas)
             smoothed = self.filter(self.X, self.y, thetas, priors, postiors)
@@ -465,6 +464,19 @@ class MSGMLR:
                        guess, method = 'SLSQP', options={'disp': False})
         return res.x
 
+    def predictDistr(self, X: pd.DataFrame = None, disp = True):
+        y = []
+        stds = []
+        if X is None:
+            X = self.X
+            priors, postiors = self.update(self.X, self.y, self.thetas)
+        else:
+            if type(X) is pd.DataFrame:
+                X = np.hstack((X[self.Xcol].values, np.ones(shape=(X.shape[0], 1)))) if self.const else X[self.Xcol].values
+                priors, postiors = self.update(self.X, self.y, self.thetas)
+        gammas, etas, betas, sigmas = self.__unpack(self.thetas)
+        return X.dot(betas.T), priors, sigmas
+                
     def predict(self, X: pd.DataFrame = None, disp = True):
         """
         Generates predictions using the trained model.
@@ -477,7 +489,6 @@ class MSGMLR:
         """
         if self.boot:
             raise NotImplementedError
-        
         y = []
         stds = []
         if X is None:
@@ -524,7 +535,7 @@ class MSGMLR:
                 stds = np.array(stds)
         return preds, stds
 
-    def plot(self, thetas, x, y, ax = None, figsize = (16,8), truelabel = None, show = True):
+    def plot(self, thetas, x, y, ax = None, figsize = (16,10), truelabel = None, show = True):
         """
         Plots the data points, model predictions, and uncertainty intervals.
 
@@ -539,14 +550,14 @@ class MSGMLR:
         gammas, etas, betas, sigmas = self.__unpack(thetas)
         if ax is None:
             fig, ax = pyplot.subplots(1, 1, figsize = figsize) 
-        if truelabel in self.data.columns: ax.scatter(self.data[x], self.data[y], c = [self.colormap[c+2] for c in self.data['z']], marker='x')
+        if truelabel in self.data.columns: ax.scatter(self.data[x], self.data[y], c = [colormap[c+2] for c in self.data['z']], marker='x')
         ls = []
         priors, postiors = self.update(self.X, self.y, thetas)
         smoothed = self.filter(self.X, self.y, thetas, priors, postiors)
         for g in range(self.ngroup):
             ax.scatter(self.data[x][np.argmax(smoothed, axis=1) == g], 
                    self.data[y][np.argmax(smoothed, axis=1) == g], 
-                   color = self.colormap[g], label = 'state '+str(g)+ ' data')
+                   color = colormap[g], label = 'state '+str(g)+ ' data')
             xaxis = np.linspace(self.data[x].min() - 0.05*(self.data[x].max() - self.data[x].min()), 
                                 self.data[x].max() + 0.05*(self.data[x].max() - self.data[x].min()), 10)
             otherxs = copy.deepcopy(self.Xcol)
@@ -555,12 +566,12 @@ class MSGMLR:
             intercept = beta.loc[y, 'Const']
             for otherx in otherxs:
                 intercept += self.data[otherx].mean()*beta.loc[y, otherx]
-            ls.append(ax.plot(xaxis, intercept + beta.loc[y, x]*xaxis, label = 'state '+str(g)+ ' model', color = self.colormap[g]))
+            ls.append(ax.plot(xaxis, intercept + beta.loc[y, x]*xaxis, label = 'state '+str(g)+ ' model', color = colormap[g]))
             sigma = pd.DataFrame(sigmas[g,:,:], index = self.ycol, columns = self.ycol)
             ax.fill_between(xaxis, intercept + beta.loc[y, x]*xaxis + 1.96 * np.sqrt(sigma.loc[y,y]),
-                            intercept + beta.loc[y, x]*xaxis - 1.96 * np.sqrt(sigma.loc[y,y]), alpha = 0.2, color = self.colormap[g])
+                            intercept + beta.loc[y, x]*xaxis - 1.96 * np.sqrt(sigma.loc[y,y]), alpha = 0.2, color = colormap[g])
             ax.fill_between(xaxis, intercept + beta.loc[y, x]*xaxis + 1.68 * np.sqrt(sigma.loc[y,y]),
-                            intercept + beta.loc[y, x]*xaxis - 1.68 * np.sqrt(sigma.loc[y,y]), alpha = 0.4, color = self.colormap[g])
+                            intercept + beta.loc[y, x]*xaxis - 1.68 * np.sqrt(sigma.loc[y,y]), alpha = 0.4, color = colormap[g])
         ax.legend(frameon = False, fontsize = 12, loc = 'upper left', ncol = self.ngroup)
         [ax.spines[loc_axis].set_visible(False) for loc_axis in ['top','right', 'bottom']]
         ax.tick_params(axis='both', which='major', labelsize=10)
@@ -570,7 +581,7 @@ class MSGMLR:
         if show: pyplot.show()
         return None if show else ax
 
-    def plotMSE(self, y, figsize = (16,8), showci = True, alpha = 0.1, show = True):
+    def plotMSE(self, y, figsize = (16,10), showci = True, alpha = 0.1, show = True):
         """
         Plots the true data points against predicted data points with Mean Squared Error information.
 
@@ -606,12 +617,12 @@ class MSGMLR:
                                 y = ypred[y][np.argmax(smoothed, axis = 1) == g],
                                 yerr = np.vstack([avg.reshape((1, avg.size)) - lbg.values.reshape((1, lbg.size)), 
                                                 ubg.values.reshape((1, ubg.size)) - avg.reshape((1, avg.size))]),
-                                marker = 'o', color = self.colormap[g], label = 'state '+str(g)+ ' {:d}'.format(int(100*(1-alpha/2.0)))+ '%CI',
+                                marker = 'o', color = colormap[g], label = 'state '+str(g)+ ' {:d}'.format(int(100*(1-alpha/2.0)))+ '%CI',
                                 elinewidth=2, capsize=3, linewidth = 0)
                 else:
                     ax.scatter(self.data[y][np.argmax(smoothed, axis = 1) == g],
                                ypred[y][np.argmax(smoothed, axis = 1) == g], 
-                               color = self.colormap[g], label = 'state '+str(g))
+                               color = colormap[g], label = 'state '+str(g))
                 
         [ax.spines[loc_axis].set_visible(False) for loc_axis in ['top','right', 'bottom']]
         ax.tick_params(axis='both', which='major', labelsize=10)
@@ -662,19 +673,19 @@ class MSGMLR:
                   'p value'.center(20), '|')
             print('-'*93)
             for col in self.Xcol:
-                print('|', '{:^10s}'.format(col).center(20), '|', 
+                print('|', '{:^10s}'.format(col[:20]).center(20), '|', 
                       '{:.4f}'.format(row[col]).center(20), '|',  
                       '{:.4f}'.format(gammastds.loc[index, col]).center(20), '|',
                       '{:.4f}'.format(gammapvals.loc[index, col]).center(20), '|',
                       )
             for col in eta_cols:
-                print('|', '{:^10s}'.format(col).center(20), '|', 
+                print('|', '{:^10s}'.format(col[:20]).center(20), '|', 
                       '{:.4f}'.format(etas.loc[index, col]).center(20), '|',  
                       '{:.4f}'.format(etastds.loc[index, col]).center(20), '|',
                       '{:.4f}'.format(etapvals.loc[index, col]).center(20), '|',
                       )
             col = 'Const'
-            print('|', '{:^10s}'.format(col).center(20), '|', 
+            print('|', '{:^10s}'.format(col[:20]).center(20), '|', 
                   '{:.4f}'.format(gammas.loc[index, col]).center(20), '|',  
                   '{:.4f}'.format(gammastds.loc[index, col]).center(20), '|',
                   '{:.4f}'.format(gammapvals.loc[index, col]).center(20), '|',
@@ -701,7 +712,7 @@ class MSGMLR:
                     'p value'.center(20), '|')
                 print('-'*93)
                 for col in betag.columns:
-                    print('|', '{:^10s}'.format(col).center(20), '|', 
+                    print('|', '{:^10s}'.format(col[:20]).center(20), '|', 
                         '{:.4f}'.format(row[col]).center(20), '|',  
                         '{:.4f}'.format(betastdg.loc[index, col]).center(20), '|',
                         '{:.4f}'.format(betapvalg.loc[index, col]).center(20), '|',
@@ -724,7 +735,8 @@ class MSGMLR:
             for idyi in range(self.ny):
                 for idyj in range(idyi+1):
                     print('-'*93)
-                    print('|', '{:^10s}'.format(self.ycol[idyi]+'-'+self.ycol[idyj]).center(20), '|', 
+                    sigmaid = self.ycol[idyi][:8]+'-'+self.ycol[idyj][:8]
+                    print('|', '{:^10s}'.format(sigmaid).center(20), '|', 
                           '{:.4f}'.format(sigmag.iloc[idyi, idyj]).center(20), '|',  
                           '{:.4f}'.format(sigmastdg.iloc[idyi, idyj]).center(20), '|',
                           '{:.4f}'.format(sigmapvalg.iloc[idyi, idyj]).center(20), '|',)
@@ -744,7 +756,7 @@ if __name__ == "__main__":
     label = smoothed[:,0] if np.mean((smoothed[:,0] - data.g)**2) < np.mean((smoothed[:,0] - 1 + data.g)**2) else 1-smoothed[:,0]
 
     # plot the state graph
-    fig, ax = pyplot.subplots(1, 1, figsize = (16,8))
+    fig, ax = pyplot.subplots(1, 1, figsize = (14,8))
     ax.plot(data.data.index, data.g, label = 'True Probability')
     ax.plot(data.data.index, label, label = 'Smoothed Probability')
     [ax.spines[loc_axis].set_visible(False) for loc_axis in ['top','right', 'bottom']]
@@ -756,9 +768,17 @@ if __name__ == "__main__":
     pyplot.show()
     
     # model results and prediction
+    '''
     msgmlr.summary()
     msgmlr.plotMSE(y = 'y1')
     oosX = data.data[data.Xcol].iloc[:10,:].values
     oosX = np.hstack((oosX, np.ones(shape=(oosX.shape[0], 1))))
     predys, predsds = msgmlr.predict(X=oosX)
     print(predys)
+    '''
+
+    # predict distribution
+    means, priors, sigmas = msgmlr.predictDistr()
+    cd = CombinedDistr(priors[50,:], means[50,:], sigmas)
+    print(msgmlr.y[50,:])
+    cd.plot(margin = 1)

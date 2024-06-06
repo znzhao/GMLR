@@ -1,16 +1,10 @@
-import time
-import copy
 import warnings
 from numpy.core.multiarray import array as array
-import tqdm
 import pandas as pd
 import numpy as np
 from scipy.stats import norm
 from matplotlib import pyplot
-from IPython.display import clear_output
-from IPython import get_ipython
-from helper.utils import Timer, gradient
-from data_generator import TSGenerator
+from helper.utils import gradient
 from msgmlr import MSGMLR
 warnings.filterwarnings('ignore')
 
@@ -116,7 +110,7 @@ class MSGMLVAR(MSGMLR):
             stds[p, :, :] = np.sqrt(predvars)
         return stds
     
-    def plotIrf(self, periods = 12, figsize = (16,8), showci = True, alpha = 0.1, show = True):
+    def plotIrf(self, periods = 12, figsize = (14,8), showci = True, alpha = 0.1, show = True):
         """
         Plot impulse response functions (IRFs).
 
@@ -157,7 +151,7 @@ class MSGMLVAR(MSGMLR):
         if show: pyplot.show()
         return None
 
-    def plotProb(self, figsize = (16,8), show = True):
+    def plotProb(self, figsize = (14,8), show = True):
         fig, ax = pyplot.subplots(self.ngroup-1, figsize = figsize)
         priors, postiors = self.update(self.X, self.y, self.thetas)
         smoothed = self.filter(self.X, self.y, self.thetas, priors, postiors)
@@ -181,11 +175,4 @@ class MSGMLVAR(MSGMLR):
         return super().predict(vardata, disp)
 
 if __name__ == "__main__":
-    data = pd.read_excel('./data/Sample.xlsx', index_col=0)
-    print(data.tail(200))
-    msgmlvar = MSGMLVAR(data.tail(200), lags=4)
-    thetas = msgmlvar.fit(plotx='L1.FFR')
-    msgmlvar.summary()
-    msgmlvar.plotIrf(showci = False)
-    msgmlvar.plotProb()
-
+    print('Module [msgmlvar] loaded.')

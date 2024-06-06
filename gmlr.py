@@ -6,21 +6,73 @@ import pandas as pd
 import numpy as np
 from typing import Literal
 from matplotlib import pyplot
-from scipy.stats import norm
+from scipy.stats import norm, multivariate_normal
 from scipy.optimize import Bounds
 from scipy.optimize import minimize
 from sklearn.metrics import mean_squared_error
 from sklearn.utils import resample
 from IPython.display import clear_output
 from IPython import get_ipython
-from sklearn.linear_model import LogisticRegression
-from helper.utils import Timer, gradient
+from helper.utils import Timer, gradient, colormap
 warnings.filterwarnings('ignore')
 
+class CombinedDistr:
+    def __init__(self, priors, means, covs):
+        self.ngroup = means.shape[-1]
+        self.priors = priors
+        self.means = means
+        self.covs = covs
+
+    def pdf(self, x):
+        res = 0
+        for g in range(self.ngroup):
+            res += self.priors[g] * multivariate_normal.pdf(x, mean=self.means[:, g], cov=self.covs[g, :, :])
+        return res
+
+    def margpdf(self, x, margin = 0):
+        res = 0
+        for g in range(self.ngroup):
+            res += self.priors[g] * multivariate_normal.pdf(x, mean=[self.means[margin, g]], cov=[self.covs[g, margin, margin]])
+        return res
+    
+    def margcdf(self, x, margin = 0):
+        res = 0
+        for g in range(self.ngroup):
+            res += self.priors[g] * multivariate_normal.cdf(x, mean=[self.means[margin, g]], cov=[self.covs[g, margin, margin]])
+        return res
+    
+    def plot(self, margin = 0, ax = None, figsize = (14,8), show = True):
+        if ax is None:
+            fig, ax = pyplot.subplots(1, 2, figsize = figsize, width_ratios=[1, 3])
+        ax[0].bar(x = ['state {}'.format(g) for g in range(self.ngroup)],height = self.priors, color = [colormap[g] for g in range(self.ngroup)])
+        ax[0].axis('tight')
+        [ax[0].spines[loc_axis].set_visible(False) for loc_axis in ['top','right', 'bottom']]
+        ax[0].tick_params(axis='both', which='major', labelsize=10)
+        ax[0].set_ylabel('Probability', fontsize=12)
+        ax[0].set_title('State Probability', fontsize=14)
+        
+        std = np.sum([np.sum(np.sqrt(np.diag(self.covs[g,:,:]))) for g in range(self.ngroup)])
+        x = np.linspace(np.min(self.means[margin, :]) - std, np.max(self.means[margin, :]) + std, 200)
+        for g in range(self.ngroup):
+            ax[1].axvspan(self.means[margin, g] - 1.68*np.sqrt(self.covs[g, margin, margin]), 
+                    self.means[margin, g] + 1.68*np.sqrt(self.covs[g, margin, margin]), 
+                    alpha=0.4, color=colormap[g])
+        ax[1].plot(x, self.margpdf(x, margin), "grey")
+        ax[1].scatter(x = self.means[margin, :], y = self.margpdf(self.means[margin, :], margin), marker = 'o', color = [colormap[g] for g in range(self.ngroup)])
+        ax[1].axvline(x = 0, color="black", linestyle = '--')
+        ax[1].axhline(y = 0, color="black", linestyle = '-')
+        ax[1].vlines(self.means[margin, :], 0, self.margpdf(self.means[margin, :], margin), linestyle="dashed", color = [colormap[g] for g in range(self.ngroup)])
+        ax[1].hlines(self.margpdf(self.means[margin, :], margin), 0, self.means[margin, :], linestyle="dashed", color = [colormap[g] for g in range(self.ngroup)])
+        ax[1].axis('tight')
+        [ax[1].spines[loc_axis].set_visible(False) for loc_axis in ['top','right', 'bottom']]
+        ax[1].tick_params(axis='both', which='major', labelsize=10)
+        ax[1].set_xlabel('Predicted Value', fontsize=12)
+        ax[1].set_ylabel('Prob Density', fontsize=12)
+        ax[1].set_title('Prob Density Function P(Value<0) = {:.2f}'.format(self.margcdf(0, margin)), fontsize=14)
+        if show: pyplot.show()
+
 class GMLR:
-    colormap = {0:'tab:blue', 1:'tab:orange', 2:'tab:green', 3:'tab:red', 4:'tab:blue', 
-                5:'tab:purple', 6:'tab:brown', 7:'tab:pink', 8:'tab:gray', 9:'tab:olive', 10:'tab:cyan'}
-    def __init__(self, data: pd.DataFrame, ycol: list, Xcol: list, ngroup = 2, const = True, cov = False, alpha = 0, norm = 1):
+    def __init__(self, data: pd.DataFrame, ycol: list, Xcol: list, ngroup = 2, const = True, cov = False, alpha = 0, costnorm = 1):
         """
         Initialize the Gaussian Mixture Linear Regression (GMLR) model with adjustable state-dependent probability.
 
@@ -95,7 +147,7 @@ class GMLR:
         
         self.cov = cov
         self.alpha = alpha
-        self.norm = norm
+        self.norm = costnorm
 
 
     def __unpack(self, thetas: np.array):
@@ -282,7 +334,7 @@ class GMLR:
         gap = np.inf
         if (not get_ipython()) and plot:
             pyplot.ion()
-            fig, ax = pyplot.subplots(1, 1, figsize = (16,8)) 
+            fig, ax = pyplot.subplots(1, 1, figsize = (14,8)) 
         for stepi in range(maxiter):
             postiors = self.postior(self.X, self.y, thetas)
             res = minimize(lambda thetas: -self.logLik(inputX, inputy, thetas, postiors) + self.alpha * self.penalty(thetas), 
@@ -364,12 +416,16 @@ class GMLR:
         return np.sum((probs - postior)**2)
     
     def solveBayes(self, prior: np.array, postior: np.array):
+        if self.ngroup == 1:
+            return prior
         phis = np.zeros((self.ngroup-1, self.ngroup))
         res = minimize(lambda phis: self.targetBayes(phis, prior, postior), phis[:], options={'disp': False})
         phis = np.reshape(res.x, (self.ngroup-1, self.ngroup))
         return phis
 
     def bayes(self, phis:np.array, prior: np.array):
+        if self.ngroup == 1:
+            return prior
         phis = np.reshape(phis, (self.ngroup-1, self.ngroup))
         probs = np.hstack([np.exp(phis.dot(prior.T)).T, np.ones((prior.shape[0], 1))])
         probs = probs / np.repeat(np.sum(probs, axis=1)[:, np.newaxis], self.ngroup, axis=1)
@@ -462,6 +518,14 @@ class GMLR:
             gammas, betas, sigmas = self.__unpack(thetas)
             return X[xi,:].dot(betas[groupid]) 
     
+    def predictDistr(self, X: pd.DataFrame = None):
+        X = self.X if X is None else X
+        if type(X) is pd.DataFrame:
+            X = np.hstack((X[self.Xcol].values, np.ones(shape=(X.shape[0], 1)))) if self.const else X[self.Xcol].values
+        priors = self.prior(X, self.thetas)
+        gammas, betas, sigmas = self.__unpack(self.thetas)        
+        return X.dot(betas.T), priors, sigmas
+
     def predict(self, X: pd.DataFrame = None, disp = True, lb = 0.05, ub = 0.95, mode: Literal['prior', 'postior'] = 'prior'):
         """
         Generates predictions using the trained model.
@@ -514,7 +578,7 @@ class GMLR:
         ubs = np.percentile(bootpreds, q = ub, axis=0).reshape(preds.shape)
         return preds, stds, lbs, ubs
 
-    def plot(self, thetas, x, y, ax = None, figsize = (16,8), truelabel = None, show = True):
+    def plot(self, thetas, x, y, ax = None, figsize = (14,8), truelabel = None, show = True):
         """
         Plots the data points, model predictions, and uncertainty intervals.
 
@@ -533,7 +597,7 @@ class GMLR:
         for g in range(self.ngroup):
             ax.scatter(self.data[x][np.argmax(self.postior(self.X, self.y, thetas), axis=1) == g], 
                    self.data[y][np.argmax(self.postior(self.X, self.y, thetas), axis=1) == g], 
-                   color = self.colormap[g], label = 'state '+str(g)+ ' data')
+                   color = colormap[g], label = 'state '+str(g)+ ' data')
             xaxis = np.linspace(self.data[x].min() - 0.05*(self.data[x].max() - self.data[x].min()), 
                                 self.data[x].max() + 0.05*(self.data[x].max() - self.data[x].min()), 10)
             otherxs = copy.deepcopy(self.Xcol)
@@ -542,13 +606,13 @@ class GMLR:
             intercept = beta.loc[y, 'Const']
             for otherx in otherxs:
                 intercept += self.data[otherx].mean()*beta.loc[y, otherx]
-            ls.append(ax.plot(xaxis, intercept + beta.loc[y, x]*xaxis, label = 'state '+str(g)+ ' model', color = self.colormap[g]))
+            ls.append(ax.plot(xaxis, intercept + beta.loc[y, x]*xaxis, label = 'state '+str(g)+ ' model', color = colormap[g]))
             sigma = pd.DataFrame(sigmas[g,:,:], index = self.ycol, columns = self.ycol)
             ax.fill_between(xaxis, intercept + beta.loc[y, x]*xaxis + 1.96 * np.sqrt(sigma.loc[y,y]),
-                            intercept + beta.loc[y, x]*xaxis - 1.96 * np.sqrt(sigma.loc[y,y]), alpha = 0.2, color = self.colormap[g])
+                            intercept + beta.loc[y, x]*xaxis - 1.96 * np.sqrt(sigma.loc[y,y]), alpha = 0.2, color = colormap[g])
             ax.fill_between(xaxis, intercept + beta.loc[y, x]*xaxis + 1.68 * np.sqrt(sigma.loc[y,y]),
-                            intercept + beta.loc[y, x]*xaxis - 1.68 * np.sqrt(sigma.loc[y,y]), alpha = 0.4, color = self.colormap[g])
-        if truelabel in self.data.columns: ax.scatter(self.data[x], self.data[y], c = [self.colormap[c+2] for c in self.data[truelabel]], marker='x', s = 10)
+                            intercept + beta.loc[y, x]*xaxis - 1.68 * np.sqrt(sigma.loc[y,y]), alpha = 0.4, color = colormap[g])
+        if truelabel in self.data.columns: ax.scatter(self.data[x], self.data[y], c = [colormap[c+2] for c in self.data[truelabel]], marker='x', s = 10)
         ax.legend(frameon = False, fontsize = 12, loc = 'upper left', ncol = self.ngroup)
         [ax.spines[loc_axis].set_visible(False) for loc_axis in ['top','right', 'bottom']]
         ax.tick_params(axis='both', which='major', labelsize=10)
@@ -558,7 +622,7 @@ class GMLR:
         if show: pyplot.show()
         return None
 
-    def plotMSE(self, y, figsize = (16,8), showci = True, alpha = 0.1, show = True, mode: Literal['prior', 'postior'] = 'prior'):
+    def plotMSE(self, y, figsize = (14,8), showci = True, alpha = 0.1, show = True, mode: Literal['prior', 'postior'] = 'prior'):
         """
         Plots the true data points against predicted data points with Mean Squared Error information.
 
@@ -590,12 +654,12 @@ class GMLR:
                 avg = (lbg.values + ubg.values)/2
                 ax.scatter(self.data[y][np.argmax(self.prior(self.X, thetas=self.thetas), axis = 1) == g],
                            ypred[y][np.argmax(self.prior(self.X, thetas=self.thetas), axis = 1) == g], 
-                           s = 5, alpha = 0.5, color = self.colormap[g], label = 'state '+str(g))
+                           s = 5, alpha = 0.5, color = colormap[g], label = 'state '+str(g))
                 if showci:
                     ax.errorbar(x = self.data[y][np.argmax(self.prior(self.X, thetas=self.thetas), axis = 1) == g], y = avg, 
                                 yerr = np.vstack([avg.reshape((1, avg.size)) - lbg.values.reshape((1, lbg.size)), 
                                                 ubg.values.reshape((1, ubg.size)) - avg.reshape((1, avg.size))]),
-                                marker = None, color = self.colormap[g], label = 'state ' + str(g) + 'Bootstrapped CI',
+                                marker = None, color = colormap[g], label = 'state ' + str(g) + 'Bootstrapped CI',
                                 elinewidth=2, capsize=3, linewidth = 0)
             else:
                 lbg = lbs[y][np.argmax(self.prior(self.X, thetas=self.thetas), axis = 1) == g]
@@ -606,12 +670,12 @@ class GMLR:
                                 y = ypred[y][np.argmax(self.prior(self.X, thetas=self.thetas), axis = 1) == g],
                                 yerr = np.vstack([avg.reshape((1, avg.size)) - lbg.values.reshape((1, lbg.size)), 
                                                 ubg.values.reshape((1, ubg.size)) - avg.reshape((1, avg.size))]),
-                                marker = 'o', color = self.colormap[g], label = 'state '+str(g)+ ' {:d}'.format(int(100*(1-alpha/2.0)))+ '%CI',
+                                marker = 'o', color = colormap[g], label = 'state '+str(g)+ ' {:d}'.format(int(100*(1-alpha/2.0)))+ '%CI',
                                 elinewidth=2, capsize=3, linewidth = 0)
                 else:
                     ax.scatter(self.data[y][np.argmax(self.prior(self.X, thetas=self.thetas), axis = 1) == g],
                                ypred[y][np.argmax(self.prior(self.X, thetas=self.thetas), axis = 1) == g], 
-                               color = self.colormap[g], label = 'state '+str(g))
+                               color = colormap[g], label = 'state '+str(g))
                 
         [ax.spines[loc_axis].set_visible(False) for loc_axis in ['top','right', 'bottom']]
         ax.tick_params(axis='both', which='major', labelsize=10)
@@ -654,7 +718,7 @@ class GMLR:
                   'p value'.center(20), '|')
             print('-'*93)
             for col in gammas.columns:
-                print('|', '{:^10s}'.format(col).center(20), '|', 
+                print('|', '{:^10s}'.format(col[:20]).center(20), '|', 
                       '{:.4f}'.format(row[col]).center(20), '|',  
                       '{:.4f}'.format(gammastds.loc[index, col]).center(20), '|',
                       '{:.4f}'.format(gammapvals.loc[index, col]).center(20), '|',
@@ -680,7 +744,7 @@ class GMLR:
                     'p value'.center(20), '|')
                 print('-'*93)
                 for col in betag.columns:
-                    print('|', '{:^10s}'.format(col).center(20), '|', 
+                    print('|', '{:^10s}'.format(col[:20]).center(20), '|', 
                         '{:.4f}'.format(row[col]).center(20), '|',  
                         '{:.4f}'.format(betastdg.loc[index, col]).center(20), '|',
                         '{:.4f}'.format(betapvalg.loc[index, col]).center(20), '|',
@@ -703,7 +767,8 @@ class GMLR:
             for idyi in range(self.ny):
                 for idyj in range(idyi+1):
                     print('-'*93)
-                    print('|', '{:^10s}'.format(self.ycol[idyi]+'-'+self.ycol[idyj]).center(20), '|', 
+                    sigmaid = self.ycol[idyi][:8]+'-'+self.ycol[idyj][:8]
+                    print('|', '{:^10s}'.format(sigmaid).center(20), '|', 
                           '{:.4f}'.format(sigmag.iloc[idyi, idyj]).center(20), '|',  
                           '{:.4f}'.format(sigmastdg.iloc[idyi, idyj]).center(20), '|',
                           '{:.4f}'.format(sigmapvalg.iloc[idyi, idyj]).center(20), '|',)
@@ -718,7 +783,7 @@ if __name__ == "__main__":
     from sklearn.model_selection import train_test_split
     from sklearn.linear_model import LinearRegression
     mses = dict()
-    data = PanelGenerator(Xrange=(-3,3), seed = 2)
+    data = PanelGenerator(ny = 2, ngroup=2, Xrange=(-3,3), seed = 658)
     data.summary()
     train, test = train_test_split(data.data, test_size = 0.2)
     
@@ -732,9 +797,17 @@ if __name__ == "__main__":
     thetas = gmlr.fit(maxiter=200, disp=True, plot=True, boot = False)
     gmlr.summary()
     gmlr.plot(thetas, x = data.Xcol[0], y = data.ycol[0], truelabel = 'group', show = True)
-    gmlr.plotMSE(y = 'y1')
 
+    '''
     # Prediction
+    gmlr.plotMSE(y = 'y1')
     predsglmr, _ = gmlr.predict(test)
+    gmlr.predictDistr()
     mses['gmlr'] = mean_squared_error(test[data.ycol], predsglmr, multioutput = 'raw_values')
     print(mses)
+    '''
+    
+    means, priors, sigmas = gmlr.predictDistr()
+    cd = CombinedDistr(priors[50,:], means[50,:], sigmas)
+    print(gmlr.y[50,:])
+    cd.plot(margin = 0)
