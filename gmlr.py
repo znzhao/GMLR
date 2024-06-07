@@ -1,3 +1,4 @@
+import os
 import time
 import copy
 import warnings
@@ -6,7 +7,8 @@ import pandas as pd
 import numpy as np
 from typing import Literal
 from matplotlib import pyplot
-from scipy.stats import norm, multivariate_normal
+import scipy.stats as stats
+from scipy.stats import multivariate_normal
 from scipy.optimize import Bounds
 from scipy.optimize import minimize
 from sklearn.metrics import mean_squared_error
@@ -18,102 +20,39 @@ warnings.filterwarnings('ignore')
 
 class CombinedDistr:
     def __init__(self, priors, means, covs):
-        '''
-        Initialize the CombinedDistr object with the given priors, means, and covariance matrices.
-
-        Args:
-        - priors (array-like): An array of prior probabilities for each group.
-        - means (array-like): A 2D array where each column represents the mean of a group.
-        - covs (array-like): A 3D array where each sub-array is the covariance matrix for a group.
-        '''
         self.ngroup = means.shape[-1]
         self.priors = priors
         self.means = means
         self.covs = covs
 
     def pdf(self, x):
-        '''
-        Calculate the probability density function (pdf) at point x for the combined distribution.
-
-        Args:
-        - x (array-like): The point at which to evaluate the pdf.
-
-        Returns:
-        - float: The evaluated pdf value at point x.
-        '''
         res = 0
         for g in range(self.ngroup):
             res += self.priors[g] * multivariate_normal.pdf(x, mean=self.means[:, g], cov=self.covs[g, :, :])
         return res
-        
-    def cdf(self, x):
-        '''
-        Calculate the cumulative density function (cdf) at point x for the combined distribution.
-
-        Args:
-        - x (array-like): The point at which to evaluate the cdf.
-
-        Returns:
-        - float: The evaluated cdf value at point x.
-        '''
-        res = 0
-        for g in range(self.ngroup):
-            res += self.priors[g] * multivariate_normal.cdf(x, mean=self.means[:, g], cov=self.covs[g, :, :])
-        return res
 
     def margpdf(self, x, margin = 0):
-        '''
-        Calculate the marginal pdf at point x along a specified margin.
-
-        Args:
-        - x (array-like): The point at which to evaluate the marginal pdf.
-        - margin (int): The dimension along which to calculate the marginal pdf (default is 0).
-
-        Returns:
-        - float: The evaluated marginal pdf value at point x.
-        '''
         res = 0
         for g in range(self.ngroup):
             res += self.priors[g] * multivariate_normal.pdf(x, mean=[self.means[margin, g]], cov=[self.covs[g, margin, margin]])
         return res
     
     def margcdf(self, x, margin = 0):
-        '''
-        Calculate the marginal cumulative distribution function (cdf) at point x along a specified margin.
-
-        Args:
-        - x (array-like): The point at which to evaluate the marginal cdf.
-        - margin (int): The dimension along which to calculate the marginal cdf (default is 0).
-
-        Returns:
-        - float: The evaluated marginal cdf value at point x.
-        '''
         res = 0
         for g in range(self.ngroup):
             res += self.priors[g] * multivariate_normal.cdf(x, mean=[self.means[margin, g]], cov=[self.covs[g, margin, margin]])
         return res
     
     def plot(self, margin = 0, ax = None, figsize = (14,8), show = True):
-        '''
-        Plot the state probabilities and marginal pdf.
-
-        Args:
-        - margin (int): The dimension along which to plot the marginal pdf (default is 0).
-        - ax (matplotlib.axes._subplots.AxesSubplot, optional): The axes on which to plot. If None, new axes will be created.
-        - figsize (tuple): Size of the figure (default is (14, 8)).
-        - show (bool): Whether to display the plot immediately (default is True).
-        '''
         if ax is None:
             fig, ax = pyplot.subplots(1, 2, figsize = figsize, width_ratios=[1, 3])
-        # Plot the state probabilities as a bar chart
         ax[0].bar(x = ['state {}'.format(g) for g in range(self.ngroup)],height = self.priors, color = [colormap[g] for g in range(self.ngroup)])
         ax[0].axis('tight')
         [ax[0].spines[loc_axis].set_visible(False) for loc_axis in ['top','right', 'bottom']]
         ax[0].tick_params(axis='both', which='major', labelsize=10)
         ax[0].set_ylabel('Probability', fontsize=12)
         ax[0].set_title('State Probability', fontsize=14)
-
-        # Plot the marginal pdf and confidence intervals for each state
+        
         std = np.sum([np.sum(np.sqrt(np.diag(self.covs[g,:,:]))) for g in range(self.ngroup)])
         x = np.linspace(np.min(self.means[margin, :]) - std, np.max(self.means[margin, :]) + std, 200)
         for g in range(self.ngroup):
@@ -133,10 +72,9 @@ class CombinedDistr:
         ax[1].set_ylabel('Prob Density', fontsize=12)
         ax[1].set_title('Prob Density Function P(Value<0) = {:.2f}'.format(self.margcdf(0, margin)), fontsize=14)
         if show: pyplot.show()
-        return ax
 
 class GMLR:
-    def __init__(self, data: pd.DataFrame, ycol: list, Xcol: list, ngroup = 2, const = True, cov = False, alpha = 0, costnorm = 1):
+    def __init__(self, data: pd.DataFrame, ycol: list, Xcol: list, ngroup = 2, const = True, cov = False, alpha = 0, norm = 1, path:str = None):
         """
         Initialize the Gaussian Mixture Linear Regression (GMLR) model with adjustable state-dependent probability.
 
@@ -211,8 +149,19 @@ class GMLR:
         
         self.cov = cov
         self.alpha = alpha
-        self.norm = costnorm
+        self.norm = norm
+        self.path = path
 
+    def saveConfig(self, thetas, path: str = './config/gmlr_config.npy'):
+        directory = os.path.dirname(path)
+        if not os.path.exists(directory):
+            os.makedirs(directory)
+        with open(path, 'wb') as configfile:
+            np.save(configfile, thetas)
+
+    def readConfig(self, path: str = './config/gmlr_config.npy'):
+        thetas = np.load(path)
+        return thetas
 
     def __unpack(self, thetas: np.array):
         """
@@ -365,34 +314,36 @@ class GMLR:
         - Numpy array of final estimated parameters.
         """
         # initialize the first guess as the OLS regression beta using only a slice of the data
-        if self.cov:
-            guess = np.zeros(self.ngammas + self.nbetas + self.nsigmas + self.ncovs)
-        else:
-            guess = np.zeros(self.ngammas + self.nbetas + self.nsigmas)
+        if self.path is None or not os.path.exists(self.path):
+            if self.cov:
+                guess = np.zeros(self.ngammas + self.nbetas + self.nsigmas + self.ncovs)
+            else:
+                guess = np.zeros(self.ngammas + self.nbetas + self.nsigmas)
 
-        betas = []
-        covs = []
-        for g in range(self.ngroup):
-            y = inputy[g*int(self.nobs/self.ngroup): (g+1)*int(self.nobs/self.ngroup)]            
-            X = inputX[g*int(self.nobs/self.ngroup): (g+1)*int(self.nobs/self.ngroup)]
-            cov = np.cov(y.T)
-            beta = np.linalg.inv(X.T.dot(X)).dot(X.T.dot(y))
-            betas.append(beta)
-            covs.append(cov)
-        betas = np.stack(betas,axis=0)
-        guess[self.slices['betas']] = np.reshape(betas, self.nbetas)
-        
-        if self.ny > 1:
-            guess[self.slices['sigmas']] = np.stack([np.diag(cov) for cov in covs], axis=0).reshape(self.nsigmas)
+            betas = []
+            covs = []
+            for g in range(self.ngroup):
+                y = inputy[g*int(self.nobs/self.ngroup): (g+1)*int(self.nobs/self.ngroup)]            
+                X = inputX[g*int(self.nobs/self.ngroup): (g+1)*int(self.nobs/self.ngroup)]
+                cov = np.cov(y.T)
+                beta = np.linalg.inv(X.T.dot(X)).dot(X.T.dot(y))
+                betas.append(beta)
+                covs.append(cov)
+            betas = np.stack(betas,axis=0)
+            guess[self.slices['betas']] = np.reshape(betas, self.nbetas)
+            if self.ny > 1:
+                guess[self.slices['sigmas']] = np.stack([np.diag(cov) for cov in covs], axis=0).reshape(self.nsigmas)
+            else:
+                guess[self.slices['sigmas']] = np.stack(covs, axis=0).reshape(self.nsigmas)
         else:
-            guess[self.slices['sigmas']] = np.stack(covs, axis=0).reshape(self.nsigmas)
-        
+            guess = self.readConfig(self.path)       
+
         # lower bound
         lb = np.array([-np.inf]*len(guess))
         lb[self.slices['sigmas']] = 1e-10
         bnds = Bounds(lb)
 
-        print('EM Estimation Started...') if disp else None        
+        print('EM Estimation Started...') if disp else None
         thetas = guess
         start = time.time()
         gap = np.inf
@@ -495,7 +446,8 @@ class GMLR:
         probs = probs / np.repeat(np.sum(probs, axis=1)[:, np.newaxis], self.ngroup, axis=1)
         return probs
     
-    def fit(self, maxiter = 100, tol = 1e-4, boot = False, nboot = 100, disp = True, plot = True, plotx = None, ploty = None):
+    def fit(self, maxiter = 100, tol = 1e-4, boot = False, nboot = 100, disp = True, 
+            plot = True, plotx = None, ploty = None, save = False, path = './config/gmlr_config.npy'):
         """
         Main fitting function.
 
@@ -518,6 +470,8 @@ class GMLR:
         thetas, loglikval, flag = self.modelFit(self.X, self.y, maxiter = maxiter, tol = tol, 
                                           disp = disp, plot = plot, plotx = plotx, ploty = ploty)
         self.thetas = thetas
+        if save:
+            self.saveConfig(thetas, path)
         self.loglikval = loglikval
         self.flag = flag
         priors = self.prior(self.X, thetas)
@@ -706,8 +660,8 @@ class GMLR:
         
         ypred = pd.DataFrame(ypred, columns=self.ycol)
         stds = pd.DataFrame(stds, columns=self.ycol)
-        lbs = pd.DataFrame(ypred - norm.ppf(1.0-alpha/2.0)*stds, columns=self.ycol)
-        ubs = pd.DataFrame(ypred + norm.ppf(1.0-alpha/2.0)*stds, columns=self.ycol)
+        lbs = pd.DataFrame(ypred - stats.norm.ppf(1.0-alpha/2.0)*stds, columns=self.ycol)
+        ubs = pd.DataFrame(ypred + stats.norm.ppf(1.0-alpha/2.0)*stds, columns=self.ycol)
         fig, ax = pyplot.subplots(1, 1, figsize = figsize)
         line45 = [min(self.data[y].min(), ypred[y].min()), max(self.data[y].max(), ypred[y].max())]
         ax.plot(line45, line45, '--', color = 'black')
@@ -769,7 +723,7 @@ class GMLR:
         print('Gamma: Logit Regression Coefficients')
         gammas = pd.DataFrame(gammas, index = ['state '+str(x) for x in range(self.ngroup-1)], columns = self.Xcol + ['Const'])
         gammastds = pd.DataFrame(gammastds, index = ['state '+str(x) for x in range(self.ngroup-1)], columns = self.Xcol + ['Const'])
-        gammapvals = pd.DataFrame(norm.cdf(-np.abs(gammas.values/gammastds.values))*2, 
+        gammapvals = pd.DataFrame(stats.norm.cdf(-np.abs(gammas.values/gammastds.values))*2, 
                                   index = ['state '+str(x) for x in range(self.ngroup-1)], columns = self.Xcol + ['Const'])
 
         for index, row in gammas.iterrows():
@@ -795,7 +749,7 @@ class GMLR:
             print('{:^10s}'.format('State ' + str(g)).center(93))
             betag = pd.DataFrame(betas[g,:,:].T, index = self.ycol, columns = self.Xcol + ['Const'])
             betastdg = pd.DataFrame(betastds[g,:,:].T, index = self.ycol, columns = self.Xcol + ['Const'])
-            betapvalg = pd.DataFrame(norm.cdf(-np.abs(betag.values/betastdg.values))*2, 
+            betapvalg = pd.DataFrame(stats.norm.cdf(-np.abs(betag.values/betastdg.values))*2, 
                                   index = self.ycol, columns = self.Xcol + ['Const'])
 
             for index, row in betag.iterrows():
@@ -822,10 +776,10 @@ class GMLR:
             print('{:^10s}'.format('State ' + str(g)).center(93))
             sigmag = pd.DataFrame(sigmas[g,:,:], index = self.ycol, columns = self.ycol)
             sigmastdg = pd.DataFrame(sigmastds[g,:,:], index = self.ycol, columns = self.ycol)
-            sigmapvalg = pd.DataFrame(norm.cdf(-np.abs(sigmag.values/sigmastdg.values))*2, index = self.ycol, columns = self.ycol)
+            sigmapvalg = pd.DataFrame(stats.norm.cdf(-np.abs(sigmag.values/sigmastdg.values))*2, index = self.ycol, columns = self.ycol)
             print('-'*93)
             print('|', 'vars-vars'.center(20), '|',  
-                  'sigma'.center(20), '|',  
+                  'sigma2'.center(20), '|',  
                   'std err'.center(20), '|',  
                   'p value'.center(20), '|')
             for idyi in range(self.ny):
@@ -857,11 +811,11 @@ if __name__ == "__main__":
     mses['lr'] = mean_squared_error(test[data.ycol], predslr, multioutput = 'raw_values')
 
     # GMLR regression
-    gmlr = GMLR(train, ycol=data.ycol, Xcol=data.Xcol, alpha=0, ngroup=2, cov=True)
-    thetas = gmlr.fit(maxiter=200, disp=True, plot=True, boot = False)
+    gmlr = GMLR(train, ycol=data.ycol, Xcol=data.Xcol, alpha=0, ngroup=2, cov=False, path='./config/gmlr_config.npy')
+    thetas = gmlr.fit(maxiter=200, disp=True, plot=True, boot = False, save=True)
     gmlr.summary()
     gmlr.plot(thetas, x = data.Xcol[0], y = data.ycol[0], truelabel = 'group', show = True)
-
+    
     '''
     # Prediction
     gmlr.plotMSE(y = 'y1')

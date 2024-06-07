@@ -2,7 +2,7 @@ import warnings
 from numpy.core.multiarray import array as array
 import pandas as pd
 import numpy as np
-from scipy.stats import norm
+import scipy.stats as stats
 from matplotlib import pyplot
 from helper.utils import gradient
 from msgmlr import MSGMLR
@@ -11,7 +11,7 @@ warnings.filterwarnings('ignore')
 
 class MSGMLVAR(MSGMLR):
     def __init__(self, data: pd.DataFrame, ycol: list = [], Xcol: list = [], extXcol: list = [], 
-                 lags: list|int = 1, ngroup = 2, const = True, cov = False, alpha = 0, norm = 1):
+                 lags: list|int = 1, ngroup = 2, const = True, cov = False, alpha = 0, norm = 1, path:str = None):
         """
         Markov Switching Gaussian Mixture Model with Lagged Variables (MSGMLVAR) class.
         
@@ -34,7 +34,7 @@ class MSGMLVAR(MSGMLR):
         self.nlags = len(lags) if type(lags) is list else lags
         self.lags = lags if type(lags) is list else range(1, lags+1)
         self.vardata, allXcol = self.initialize(data, ycol, Xcol, extXcol, lags)
-        super().__init__(self.vardata, self.ycol, allXcol, ngroup, const, cov, alpha, norm)
+        super().__init__(self.vardata, self.ycol, allXcol, ngroup, const, cov, alpha, norm, path)
     
     def initialize(self, data: pd.DataFrame):
         """
@@ -64,7 +64,17 @@ class MSGMLVAR(MSGMLR):
         vardata = pd.concat([vary, varX], axis=1).dropna(axis=0)
         allXcol = allXcol + self.extXcol
         return vardata, allXcol
+    
+    def saveConfig(self, thetas, path: str = './config/msgmlvar_config.npy'):
+        super.saveConfig(thetas, path)
 
+    def readConfig(self, path: str = './config/msgmlvar_config.npy'):
+        return super.readConfig(path)
+    
+    def fit(self, maxiter = 100, tol = 1e-4, boot = False, nboot = 100, disp = True, 
+            plot = True, plotx = None, ploty = None, save = False, path = './config/msgmlvar_config.npy'):
+        return super.fit(self, maxiter, tol, boot, nboot, disp, plot, plotx, ploty, save, path)
+    
     def statePred(self, thetas: np.array, state = 0, periods = 5):
         """
         Predict state for a given number of periods.
@@ -129,8 +139,8 @@ class MSGMLVAR(MSGMLR):
             irf = self.statePred(self.thetas, state, periods)
             if showci:
                 stds = self.statePredStd(state, periods)
-                lbs = irf - norm.ppf(1.0-alpha/2.0)*stds
-                ubs = irf + norm.ppf(1.0-alpha/2.0)*stds
+                lbs = irf - stats.norm.ppf(1.0-alpha/2.0)*stds
+                ubs = irf + stats.norm.ppf(1.0-alpha/2.0)*stds
             for shock_i in range(self.ny):
                 for y_i in range(self.ny):
                     ax[shock_i, y_i].plot(taxis, irf[:, shock_i, y_i], color = self.colormap[state], label = 'state '+str(state))

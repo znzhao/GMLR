@@ -1,3 +1,4 @@
+import os
 import time
 import copy
 import warnings
@@ -7,7 +8,7 @@ import numpy as np
 from numba import njit
 from numba.np.unsafe import ndarray # essential to solve the bug in numba
 from matplotlib import pyplot
-from scipy.stats import norm
+import scipy.stats as stats
 from scipy.optimize import Bounds
 from scipy.optimize import minimize
 from sklearn.metrics import mean_squared_error
@@ -97,7 +98,7 @@ def update(X: np.array, y: np.array, thetas: np.array, cov: bool, const:bool, no
     return priors, postiors
 
 class MSGMLR:
-    def __init__(self, data: pd.DataFrame, ycol: list, Xcol: list, ngroup = 2, const = True, cov = False, alpha = 0, norm = 1):
+    def __init__(self, data: pd.DataFrame, ycol: list, Xcol: list, ngroup = 2, const = True, cov = False, alpha = 0, norm = 1, path:str = None):
         """
         Initialize the Markov Switching Gaussian Mixture Linear Regression (GMLR) model with adjustable state-dependent probability.
 
@@ -179,6 +180,19 @@ class MSGMLR:
         self.alpha = alpha
         self.norm = norm
         self.const = const
+        self.path = path
+
+
+    def saveConfig(self, thetas, path: str = './config/msgmlr_config.npy'):
+        directory = os.path.dirname(path)
+        if not os.path.exists(directory):
+            os.makedirs(directory)
+        with open(path, 'wb') as configfile:
+            np.save(configfile, thetas)
+
+    def readConfig(self, path: str = './config/msgmlr_config.npy'):
+        thetas = np.load(path)
+        return thetas
 
     def __unpack(self, thetas: np.array):
         return unpackParams(thetas, self.cov, self.const, self.ngroup, self.nX, self.ny, self.ngammas, self.netas, self.nbetas, self.nsigmas, self.ncovs)
@@ -290,28 +304,31 @@ class MSGMLR:
         - Numpy array of final estimated parameters.
         """
         # initialize the first guess as the OLS regression beta using only a slice of the data
-        if self.cov:
-            guess = np.zeros(self.ngammas + self.netas + self.nbetas + self.nsigmas + self.ncovs)
-        else:
-            guess = np.zeros(self.ngammas + self.netas + self.nbetas + self.nsigmas)
+        if self.path is None or not os.path.exists(self.path):
+            if self.cov:
+                guess = np.zeros(self.ngammas + self.netas + self.nbetas + self.nsigmas + self.ncovs)
+            else:
+                guess = np.zeros(self.ngammas + self.netas + self.nbetas + self.nsigmas)
 
-        betas = []
-        covs = []
-        for g in range(self.ngroup):
-            y = inputy[g*int(self.nobs/self.ngroup): (g+1)*int(self.nobs/self.ngroup)]            
-            X = inputX[g*int(self.nobs/self.ngroup): (g+1)*int(self.nobs/self.ngroup)]
-            cov = np.cov(y.T)
-            beta = np.linalg.inv(X.T.dot(X)).dot(X.T.dot(y))
-            betas.append(beta)
-            covs.append(cov)
-        betas = np.stack(betas,axis=0)
-        guess[self.slices['betas']] = np.reshape(betas, self.nbetas)
-        
-        if self.ny > 1:
-            guess[self.slices['sigmas']] = np.stack([np.diag(cov) for cov in covs], axis=0).reshape(self.nsigmas)
+            betas = []
+            covs = []
+            for g in range(self.ngroup):
+                y = inputy[g*int(self.nobs/self.ngroup): (g+1)*int(self.nobs/self.ngroup)]            
+                X = inputX[g*int(self.nobs/self.ngroup): (g+1)*int(self.nobs/self.ngroup)]
+                cov = np.cov(y.T)
+                beta = np.linalg.inv(X.T.dot(X)).dot(X.T.dot(y))
+                betas.append(beta)
+                covs.append(cov)
+            betas = np.stack(betas,axis=0)
+            guess[self.slices['betas']] = np.reshape(betas, self.nbetas)
+            
+            if self.ny > 1:
+                guess[self.slices['sigmas']] = np.stack([np.diag(cov) for cov in covs], axis=0).reshape(self.nsigmas)
+            else:
+                guess[self.slices['sigmas']] = np.stack(covs, axis=0).reshape(self.nsigmas)
         else:
-            guess[self.slices['sigmas']] = np.stack(covs, axis=0).reshape(self.nsigmas)
-        
+            guess = self.readConfig(self.path)
+
         # lower bound
         lb = np.array([-np.inf]*len(guess))
         lb[self.slices['sigmas']] = 1e-10
@@ -380,7 +397,8 @@ class MSGMLR:
             hex += loglik_gradient[:,i][:, np.newaxis].dot(loglik_gradient[:,i][:, np.newaxis].T)
         return hex/self.nobs
 
-    def fit(self, maxiter = 100, tol = 1e-4, boot = False, nboot = 100, disp = True, plot = True, plotx = None, ploty = None):
+    def fit(self, maxiter = 100, tol = 1e-4, boot = False, nboot = 100, disp = True, 
+            plot = True, plotx = None, ploty = None, save = False, path = './config/msgmlr_config.npy'):
         """
         Main fitting function.
 
@@ -403,6 +421,8 @@ class MSGMLR:
         thetas, loglikval, flag = self.modelFit(self.X, self.y, maxiter = maxiter, tol = tol, 
                                           disp = disp, plot = plot, plotx = plotx, ploty = ploty)
         self.thetas = thetas
+        if save:
+            self.saveConfig(thetas, path)
         self.loglikval = loglikval
         self.flag = flag
         priors, postiors = self.update(self.X, self.y, thetas)
@@ -598,8 +618,8 @@ class MSGMLR:
         
         ypred = pd.DataFrame(ypred, columns=self.ycol)
         stds = pd.DataFrame(stds, columns=self.ycol)
-        lbs = pd.DataFrame(ypred - norm.ppf(1.0-alpha/2.0)*stds, columns=self.ycol)
-        ubs = pd.DataFrame(ypred + norm.ppf(1.0-alpha/2.0)*stds, columns=self.ycol)
+        lbs = pd.DataFrame(ypred - stats.norm.ppf(1.0-alpha/2.0)*stds, columns=self.ycol)
+        ubs = pd.DataFrame(ypred + stats.norm.ppf(1.0-alpha/2.0)*stds, columns=self.ycol)
         fig, ax = pyplot.subplots(1, 1, figsize = figsize)
         line45 = [min(self.data[y].min(), ypred[y].min()), max(self.data[y].max(), ypred[y].max())]
         ax.plot(line45, line45, '--', color = 'black')
@@ -652,14 +672,14 @@ class MSGMLR:
         print('Gamma & Eta: Logit Regression Coefficients')
         gammas = pd.DataFrame(gammas, index = ['state '+str(x) for x in range(self.ngroup-1)], columns = self.Xcol + ['Const'])
         gammastds = pd.DataFrame(gammastds, index = ['state '+str(x) for x in range(self.ngroup-1)], columns = self.Xcol + ['Const'])
-        gammapvals = pd.DataFrame(norm.cdf(-np.abs(gammas.values/gammastds.values))*2, 
+        gammapvals = pd.DataFrame(stats.norm.cdf(-np.abs(gammas.values/gammastds.values))*2, 
                                   index = ['state '+str(x) for x in range(self.ngroup-1)], columns = self.Xcol + ['Const'])
         eta_cols = ['P(L.state '+str(x)+')' for x in range(self.ngroup-1 if self.const else self.ngroup)]
         etas = pd.DataFrame(etas, index = ['state '+str(x) for x in range(self.ngroup-1)],
                             columns = eta_cols)
         etastds = pd.DataFrame(etastds, index = ['state '+str(x) for x in range(self.ngroup-1)], 
                                columns = eta_cols)
-        etapvals = pd.DataFrame(norm.cdf(-np.abs(etas.values/etastds.values))*2, 
+        etapvals = pd.DataFrame(stats.norm.cdf(-np.abs(etas.values/etastds.values))*2, 
                                 index = ['state '+str(x) for x in range(self.ngroup-1)], 
                                 columns = eta_cols)
 
@@ -699,7 +719,7 @@ class MSGMLR:
             print('{:^10s}'.format('State ' + str(g)).center(93))
             betag = pd.DataFrame(betas[g,:,:].T, index = self.ycol, columns = self.Xcol + ['Const'])
             betastdg = pd.DataFrame(betastds[g,:,:].T, index = self.ycol, columns = self.Xcol + ['Const'])
-            betapvalg = pd.DataFrame(norm.cdf(-np.abs(betag.values/betastdg.values))*2, 
+            betapvalg = pd.DataFrame(stats.norm.cdf(-np.abs(betag.values/betastdg.values))*2, 
                                   index = self.ycol, columns = self.Xcol + ['Const'])
 
             for index, row in betag.iterrows():
@@ -726,10 +746,10 @@ class MSGMLR:
             print('{:^10s}'.format('State ' + str(g)).center(93))
             sigmag = pd.DataFrame(sigmas[g,:,:], index = self.ycol, columns = self.ycol)
             sigmastdg = pd.DataFrame(sigmastds[g,:,:], index = self.ycol, columns = self.ycol)
-            sigmapvalg = pd.DataFrame(norm.cdf(-np.abs(sigmag.values/sigmastdg.values))*2, index = self.ycol, columns = self.ycol)
+            sigmapvalg = pd.DataFrame(stats.norm.cdf(-np.abs(sigmag.values/sigmastdg.values))*2, index = self.ycol, columns = self.ycol)
             print('-'*93)
             print('|', 'vars-vars'.center(20), '|',  
-                  'sigma'.center(20), '|',  
+                  'sigma2'.center(20), '|',  
                   'std err'.center(20), '|',  
                   'p value'.center(20), '|')
             for idyi in range(self.ny):
@@ -747,10 +767,10 @@ class MSGMLR:
 
 if __name__ == "__main__":
     # test package
-    data = TSGenerator(nX=2, ny = 2, Xrange=(-3, 3))
+    data = TSGenerator(nX=2, ny = 2, Xrange=(-3, 3), seed=1)
     data.summary()
-    msgmlr = MSGMLR(data.data, ycol=data.ycol, Xcol=data.Xcol, alpha=0, ngroup=2, cov=True)
-    thetas = msgmlr.fit(maxiter=200, disp=True, plot=True, boot = False)
+    msgmlr = MSGMLR(data.data, ycol=data.ycol, Xcol=data.Xcol, alpha=0, ngroup=2, cov=True, path='./config/msgmlr_config.npy')
+    thetas = msgmlr.fit(maxiter=200, disp=True, plot=True, boot = False, save=True)
     priors, postiors = msgmlr.update(msgmlr.X, msgmlr.y, thetas)
     smoothed = msgmlr.filter(msgmlr.X, msgmlr.y, thetas, priors, postiors)
     label = smoothed[:,0] if np.mean((smoothed[:,0] - data.g)**2) < np.mean((smoothed[:,0] - 1 + data.g)**2) else 1-smoothed[:,0]
@@ -766,10 +786,10 @@ if __name__ == "__main__":
     ax.set_ylabel('Pred Data', fontsize=12)
     ax.set_title('Smoothed Probability vs True Probability of being in state 1', fontsize=14)
     pyplot.show()
+    msgmlr.summary()
     
     # model results and prediction
     '''
-    msgmlr.summary()
     msgmlr.plotMSE(y = 'y1')
     oosX = data.data[data.Xcol].iloc[:10,:].values
     oosX = np.hstack((oosX, np.ones(shape=(oosX.shape[0], 1))))
@@ -779,6 +799,6 @@ if __name__ == "__main__":
 
     # predict distribution
     means, priors, sigmas = msgmlr.predictDistr()
-    cd = CombinedDistr(priors[50,:], means[50,:], sigmas)
-    print(msgmlr.y[50,:])
+    cd = CombinedDistr(priors[40,:], means[40,:], sigmas)
+    print(msgmlr.y[40,:])
     cd.plot(margin = 1)
