@@ -2,6 +2,10 @@
 
 Gaussian Mixture Linear Regression (GMLR) model with adjustable state-dependent probability. This package is designed for fitting and predicting mixture models using the Expectation-Maximization (EM) algorithm, specifically tailored for time series data with Markov switching. 
 
+## Latest Version
+0.5.0 Sklearn Update
+Add API for global sklearn support
+
 ## Features 
 
 - **Markov Switching Gaussian Mixture Model with Lagged Variables (MSGMLVAR)**: Extends the Gaussian Mixture Linear Regression (GMLR) to include support for lagged variables and Markov switching. 
