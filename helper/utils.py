@@ -5,6 +5,9 @@ import numba as nb
 import datetime
 from numba import njit
 
+colormap = {0:'tab:blue', 1:'tab:orange', 2:'tab:green', 3:'tab:red', 4:'tab:blue', 
+            5:'tab:purple', 6:'tab:brown', 7:'tab:pink', 8:'tab:gray', 9:'tab:olive', 10:'tab:cyan'}
+
 class Timer(object):
     def __init__(self, name=None, display = True):
         self.name = name
