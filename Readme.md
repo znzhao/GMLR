@@ -3,8 +3,11 @@
 Gaussian Mixture Linear Regression (GMLR) model with adjustable state-dependent probability. This package is designed for fitting and predicting mixture models using the Expectation-Maximization (EM) algorithm, specifically tailored for time series data with Markov switching. 
 
 ## Latest Version
-0.5.0 Sklearn Update
-Add API for global sklearn support
+
+- 0.5.0 Sklearn Update (06/18/2024)
+  - Add API for global sklearn support
+  - Package Restructured for no Matplotlib requirement
+  - New graph support for MS-GMLR and MS-GML-VAR models: History Probability Graph
 
 ## Features 
 
@@ -22,82 +25,96 @@ Add API for global sklearn support
 
 **Description:** The Gaussian Mixture Linear Regression (GMLR) class is designed for fitting and predicting mixture models using the Expectation-Maximization (EM) algorithm.
 
-**Parameters:**
-
-- **data (pd.DataFrame):** Input data.
-- **ycol (list):** List of column names for the dependent variable(s).
-- **Xcol (list):** List of column names for the independent variable(s).
-- **ngroup (int):** Number of groups or states in the model.
-- **const (bool):** Boolean indicating whether to include a constant term in the regression model.
-- **cov (bool):** Boolean indicating whether to include a covariance term in the variance-covariance matrix.
-
 **Usage Example:**
 
 ```python
-pythonCopy code# Initialize the GMLR instance
-gmlr_model = GMLR(data, ycol=['y1', 'y2'], Xcol=['X1', 'X2'], ngroup=2, const=True)
+from gmlr import GMLR
+from data.data_generator import PanelGenerator
+from distr import CombinedDistr
+from sklearn.model_selection import train_test_split
 
-# Fit the model using the EM algorithm
-gmlr_model.fit(maxiter=50, tol=1e-6)
+# Sim Data Generation
+data = PanelGenerator(ny = 2, ngroup=2, Xrange=(-3,3), seed = 112)
+data.summary()
+train, test = train_test_split(data.data, test_size = 0.2)
 
-# Generate predictions for the dependent variables
-predictions = gmlr_model.predict()
+# GMLR Model Fitting
+gmlr_mod = GMLR(verbose=3)
+X = train[data.Xcol]
+y = train[data.ycol]
+gmlr_mod.fit(X, y)
+gmlr_mod.summary()
+
+# Out-of-Sample Prediction
+test = test[data.Xcol]
+priors, values, sigmas = gmlr_mod.predict_distr(test)
+distr = CombinedDistr(priors, values, sigmas)
+distr[0].plot(margin=1, suptitle='Suptitle')
 ```
 
 ### MSGMLR Class
 
 **Description:** The Markov Switching Gaussian Mixture Linear Regression (MSGMLR) class extends the functionality of the GMLR model by providing support for fitting and predicting mixture models for time series data using the Expectation-Maximization (EM) algorithm.
 
-**Parameters:**
-
-- **data (pd.DataFrame):** Input data.
-- **ycol (list):** List of column names for the dependent variable(s).
-- **Xcol (list):** List of column names for the independent variable(s).
-- **ngroup (int):** Number of groups or states in the model.
-- **const (bool):** Boolean indicating whether to include a constant term in the regression model.
-- **cov (bool):** Boolean indicating whether to include a covariance term in the variance-covariance matrix.
-
 **Usage Example:**
 
 ```python
-# Initialize the MSGMLR instance
-msgmlr_model = MSGMLR(data, ycol=['y1', 'y2'], Xcol=['X1', 'X2'], ngroup=2, const=True)
+from msgmlr import GMLR
+from data.data_generator import TSGenerator
+from distr import CombinedDistr
 
-# Fit the model using the EM algorithm
-msgmlr_model.fit(maxiter=50, tol=1e-6)
+# Sim Data Generation
+data = TSGenerator(nX=2, ny = 2, Xrange=(-3, 3), seed=1)
+data.summary()
+train, test = data.data.iloc[:-5], data.data.iloc[-5:]
 
-# Generate predictions for the dependent variables
-predictions = msgmlr_model.predict()
+# GMLR Model Fitting
+msgmlr_mod = MSGMLR(verbose=3)
+X = train[data.Xcol]
+y = train[data.ycol]
+msgmlr_mod.fit(X, y)
+msgmlr_mod.summary()
+
+# plot graph for state probability history
+msgmlr_mod.plot_history()
+
+# Out-of-Sample Prediction
+test = test[data.Xcol]
+priors, values, sigmas = msgmlr_mod.predict_distr(test)
+distr = CombinedDistr(priors, values, sigmas)
+distr[0].plot(margin=1, suptitle='Suptitle')
 ```
 
 ### MSGMLVAR Class
 
 **Description:** The Markov Switching Gaussian Mixture Model with Lagged Variables (MSGMLVAR) class extends the functionality of the GMLR model to include lagged variables and support for Markov switching.
 
-**Parameters:**
-
-- **data (pd.DataFrame):** Input data.
-- **ycol (list):** List of column names for the endogenous variables.
-- **Xcol (list):** List of column names for exogenous variables.
-- **extXcol (list):** List of column names for externally given exogenous variables.
-- **lags (list|int):** Number of lags to consider.
-- **ngroup (int):** Number of groups for the Gaussian mixture model.
-- **const (bool):** Whether to include a constant term.
-- **cov (bool):** Whether to calculate covariances.
-- **alpha (float):** Coefficient for regularization.
-- **norm (float):** Normalization factor.
-
 **Usage Example:**
-
 ```python
-# Initialize the MSGMLVAR instance
-msgmlvar_model = MSGMLVAR(data, ycol=['y1', 'y2'], Xcol=['X1', 'X2'], ngroup=2, const=True)
+from msgmlvar import MSGMLVAR
+from data.data_generator import TSGenerator
+from distr import CombinedDistr
 
-# Fit the model using the EM algorithm
-msgmlvar_model.fit(maxiter=50, tol=1e-6)
+# Sim Data Generation
+data = TSGenerator(nX=2, ny = 2, Xrange=(-3, 3), seed=1)
+data.summary()
+train, test = data.data.iloc[:-5], data.data.iloc[-5:]
 
-# Generate predictions for the dependent variables
-predictions = msgmlvar_model.predict()
+# GMLR Model Fitting
+msgmlvar_mod = MSGMLVAR(verbose=3)
+X = train[data.Xcol]
+y = train[data.ycol]
+msgmlvar_mod.fit(X, y)
+msgmlvar_mod.summary()
+
+# plot graph for state impluse response functions
+msgmlvar_mod.plot_irf()
+
+# Out-of-Sample Prediction
+test = test[data.Xcol]
+priors, values, sigmas = msgmlvar_mod.predict_distr(test)
+distr = CombinedDistr(priors, values, sigmas)
+distr[0].plot(margin=1, suptitle='Suptitle')
 ```
 
 ## Documentation
