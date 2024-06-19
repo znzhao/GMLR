@@ -9,8 +9,8 @@ from helper.utils import gradient
 
 class SklearnMSGMLVAR(SklearnMSGMLR):
     _parameter_constraints = {
-        "x_lags": [int],
-        "y_lags": [int],
+        "x_lags": [int, list],
+        "y_lags": [int, list],
         "include_curr_x": [bool],
         "const_col_index": [list, str, None],
         "n_clusters": [int],
@@ -26,7 +26,7 @@ class SklearnMSGMLVAR(SklearnMSGMLR):
         "verbose": [int],
         "pred_mode": [str]
     }
-    def __init__(self, x_lags = 1, y_lags = 1, include_curr_x: bool = True, const_col_index: list[int]|Literal['all'] = None, 
+    def __init__(self, x_lags:int|list[int] = 1, y_lags:int|list[int] = 1, include_curr_x: bool = True, const_col_index: list[int]|Literal['all'] = None, 
                  ascending: bool = True, n_clusters: int = 2, fit_intercept: bool = True, fit_cov: bool = False, alpha: float = 0.0, 
                  norm: int|float = 1, warm_start: bool = False, path: str = None, max_iter:int = 100,
                  tol:float = 1e-4, step_plot: callable = None, pred_mode: Literal['naive', 'loglik'] = 'naive', verbose = 0):
@@ -93,7 +93,9 @@ class SklearnMSGMLVAR(SklearnMSGMLR):
         >>> msgmlvar_mod = SklearnMSGMLVAR()
         >>> msgmlvar_mod.fit(X, y)
         """
-        if x_lags < 1 or y_lags < 0:
+        if type(x_lags) == int and x_lags < 1:
+            raise ValueError("Cannot use future value to predict current values")
+        if type(y_lags) == int and y_lags < 0:
             raise ValueError("Cannot use future value to predict current values")
         self.x_lags = x_lags
         self.y_lags = y_lags
