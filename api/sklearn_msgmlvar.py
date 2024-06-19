@@ -246,8 +246,9 @@ class SklearnMSGMLVAR(SklearnMSGMLR):
         
         X_to_model_col = []
         # generate lags
-        if self.y_lags >= 1:
-            for lag in range(1, self.y_lags+1):
+        y_lags = self.y_lags if type(self.y_lags) == list else range(1, self.y_lags+1)
+        if (type(self.y_lags) == int and self.y_lags >= 1) or type(self.y_lags) == list:
+            for lag in y_lags:
                 X_to_model_col += ['L{}.{}'.format(lag, y_label) for y_label in target_]
         # include the lags for X
         if X is not None:
