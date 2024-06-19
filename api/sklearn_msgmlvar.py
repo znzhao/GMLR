@@ -9,7 +9,7 @@ from helper.utils import gradient
 
 class SklearnMSGMLVAR(SklearnMSGMLR):
     _parameter_constraints = {
-        "x_lags": [int, list],
+        "X_lags": [int, list],
         "y_lags": [int, list],
         "include_curr_x": [bool],
         "const_col_index": [list, str, None],
@@ -26,7 +26,7 @@ class SklearnMSGMLVAR(SklearnMSGMLR):
         "verbose": [int],
         "pred_mode": [str]
     }
-    def __init__(self, x_lags:int|list[int] = 1, y_lags:int|list[int] = 1, include_curr_x: bool = True, const_col_index: list[int]|Literal['all'] = None, 
+    def __init__(self, X_lags:int|list[int] = 1, y_lags:int|list[int] = 1, include_curr_x: bool = True, const_col_index: list[int]|Literal['all'] = None, 
                  ascending: bool = True, n_clusters: int = 2, fit_intercept: bool = True, fit_cov: bool = False, alpha: float = 0.0, 
                  norm: int|float = 1, warm_start: bool = False, path: str = None, max_iter:int = 100,
                  tol:float = 1e-4, step_plot: callable = None, pred_mode: Literal['naive', 'loglik'] = 'naive', verbose = 0):
@@ -38,7 +38,7 @@ class SklearnMSGMLVAR(SklearnMSGMLR):
 
         Parameters
         ----------
-        x_lags : int, default=1
+        X_lags : int, default=1
             Number of lagged values for X.
         y_lags : int, default=1
             Number of lagged values for y.
@@ -93,11 +93,11 @@ class SklearnMSGMLVAR(SklearnMSGMLR):
         >>> msgmlvar_mod = SklearnMSGMLVAR()
         >>> msgmlvar_mod.fit(X, y)
         """
-        if type(x_lags) == int and x_lags < 1:
+        if type(X_lags) == int and X_lags < 1:
             raise ValueError("Cannot use future value to predict current values")
         if type(y_lags) == int and y_lags < 0:
             raise ValueError("Cannot use future value to predict current values")
-        self.x_lags = x_lags
+        self.X_lags = X_lags
         self.y_lags = y_lags
         self.include_curr_x = include_curr_x
         self.const_col_index = const_col_index
@@ -185,9 +185,10 @@ class SklearnMSGMLVAR(SklearnMSGMLR):
             if self.include_curr_x:
                 X_to_model = copy.deepcopy(to_lag) if X_to_model is None else np.hstack([X_to_model, to_lag])
                 
-            # generate lags
-            if self.x_lags >=1:
-                for lag in range(1, self.x_lags+1):
+            # generate lags        
+            X_lags = self.X_lags if type(self.X_lags) == list else range(1, self.X_lags+1)
+            if (type(self.X_lags) == int and self.X_lags >= 1) or type(self.X_lags) == list:
+                for lag in X_lags:
                     lag_X = np.zeros(to_lag.shape)*np.nan
                     lag_X[lag:] = copy.deepcopy(to_lag[:-lag])
                     X_to_model = copy.deepcopy(lag_X) if X_to_model is None else np.hstack([X_to_model, lag_X])
@@ -254,10 +255,11 @@ class SklearnMSGMLVAR(SklearnMSGMLR):
         if X is not None:
             if self.include_curr_x:
                 X_to_model_col += [features_[k] for k in to_lag_col]
-            # generate lags
-            if self.x_lags >=1:
-                for lag in range(1, self.x_lags+1):
-                    X_to_model_col += ['L{}.{}'.format(lag, features_[k]) for k in to_lag_col]
+                # generate lags
+                X_lags = self.X_lags if type(self.X_lags) == list else range(1, self.X_lags+1)
+                if (type(self.X_lags) == int and self.X_lags >= 1) or type(self.X_lags) == list:
+                    for lag in X_lags:
+                        X_to_model_col += ['L{}.{}'.format(lag, features_[k]) for k in to_lag_col]
             X_to_model_col += [features_[k] for k in no_lag_col]
 
         # put them into dataframe
