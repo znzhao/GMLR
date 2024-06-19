@@ -95,6 +95,3 @@ class MSGMLVAR(SklearnMSGMLVAR):
                 ax[shock_i, y_i].set_xticks(t_axis)
         if show: pyplot.show()
         return None if show else fig, ax
-
-if __name__ == "__main__":
-    print('Module [msgmlvar] loaded.')
