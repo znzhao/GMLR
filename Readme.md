@@ -4,6 +4,12 @@ Gaussian Mixture Linear Regression (GMLR) model with adjustable state-dependent 
 
 ## Latest Version
 
+- 0.5.1 Bug Fix (06/19/2024)
+  - Fix:
+    - pred_distr bug fixed. Now it should be able to predict as expected.
+  - Remove:
+    - Remove the attr `ascending' from MS models. Now input data has to be ascending.
+
 - 0.5.0 Sklearn Update (06/18/2024)
   - Add API for global sklearn support
   - Package Restructured for no Matplotlib requirement
