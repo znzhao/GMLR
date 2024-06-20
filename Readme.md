@@ -11,11 +11,20 @@ Gaussian Mixture Linear Regression (GMLR) model with adjustable state-dependent 
     - Remove the attr `ascending' from MS models. Now input data has to be ascending.
 
 - 0.5.0 Sklearn Update (06/18/2024)
-  - Add API for global sklearn support
-  - Package Restructured for no Matplotlib requirement
-  - New graph support for MS-GMLR and MS-GML-VAR models: History Probability Graph
+  - Add:
+    - Add API for global sklearn support
+    - Package Restructured for no Matplotlib requirement
+    - New graph support for MS-GMLR and MS-GML-VAR models: History Probability Graph
 
-- 0.3.2 Stable Update (06/06/2024)
+- 0.4.0 Stable Update (06/07/2024)
+- Add:
+  - add a new feature of saving model configs
+- Fix:
+  - fix the problem of norm inconsistency
+  - fix config path
+  - fix printing sigma issue. Now it's clear that the printing is variance.
+
+- 0.3.2 Hotfix (06/06/2024)
   - Fix:
     - Fixed the printing format. Now the variables with more than 20 chars will be trancated.
     - updated data generator will random seeds.
