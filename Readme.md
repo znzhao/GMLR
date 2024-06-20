@@ -15,6 +15,9 @@ Gaussian Mixture Linear Regression (GMLR) model with adjustable state-dependent 
   - Package Restructured for no Matplotlib requirement
   - New graph support for MS-GMLR and MS-GML-VAR models: History Probability Graph
 
+- 0.0.1 GMLR (03/24/2024)
+  - Update the basic GMLR algorithm for panel data. Markov Switching Gaussian Mixed Linear Regression (MS-GLMR) will be developed in the future.
+
 ## Features 
 
 - **Markov Switching Gaussian Mixture Model with Lagged Variables (MSGMLVAR)**: Extends the Gaussian Mixture Linear Regression (GMLR) to include support for lagged variables and Markov switching. 
