@@ -17,12 +17,12 @@ Gaussian Mixture Linear Regression (GMLR) model with adjustable state-dependent 
     - New graph support for MS-GMLR and MS-GML-VAR models: History Probability Graph
 
 - 0.4.0 Stable Update (06/07/2024)
-- Add:
-  - add a new feature of saving model configs
-- Fix:
-  - fix the problem of norm inconsistency
-  - fix config path
-  - fix printing sigma issue. Now it's clear that the printing is variance.
+  - Add:
+    - add a new feature of saving model configs
+  - Fix:
+    - fix the problem of norm inconsistency
+    - fix config path
+    - fix printing sigma issue. Now it's clear that the printing is variance.
 
 - 0.3.2 Hotfix (06/06/2024)
   - Fix:
