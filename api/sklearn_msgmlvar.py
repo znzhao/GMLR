@@ -27,7 +27,7 @@ class SklearnMSGMLVAR(SklearnMSGMLR):
         "pred_mode": [str]
     }
     def __init__(self, X_lags:int|list[int] = 1, y_lags:int|list[int] = 1, include_curr_x: bool = True, const_col_index: list[int]|Literal['all'] = None, 
-                 ascending: bool = True, n_clusters: int = 2, fit_intercept: bool = True, fit_cov: bool = False, alpha: float = 0.0, 
+                 n_clusters: int = 2, fit_intercept: bool = True, fit_cov: bool = False, alpha: float = 0.0, 
                  norm: int|float = 1, warm_start: bool = False, path: str = None, max_iter:int = 100,
                  tol:float = 1e-4, step_plot: callable = None, pred_mode: Literal['naive', 'loglik'] = 'naive', verbose = 0):
         """
@@ -46,8 +46,6 @@ class SklearnMSGMLVAR(SklearnMSGMLR):
             Flag to include current X values in modeling.
         const_col_index : list of int or Literal['all'], optional
             Indices of columns in X to treat as constants or 'all' columns.
-        ascending : bool, default=True
-            Whether to process data in ascending time order.
         n_clusters : int, default=2
             Number of clusters for modeling.
         fit_intercept : bool, default=True
@@ -101,7 +99,7 @@ class SklearnMSGMLVAR(SklearnMSGMLR):
         self.y_lags = y_lags
         self.include_curr_x = include_curr_x
         self.const_col_index = const_col_index
-        super().__init__(ascending, n_clusters, fit_intercept, fit_cov, alpha, norm, warm_start, path, max_iter, tol, step_plot, pred_mode, verbose)
+        super().__init__(n_clusters, fit_intercept, fit_cov, alpha, norm, warm_start, path, max_iter, tol, step_plot, pred_mode, verbose)
     
     def saveConfig(self, thetas, path: str = './config/msgmlvar_config.npy'):
         """
@@ -150,8 +148,6 @@ class SklearnMSGMLVAR(SklearnMSGMLR):
         """
         X_to_model = None
         # include the lags for y
-        if not self.ascending:
-            y = y[::-1]
         X_to_model = None
         # generate lags
         if self.y_lags >= 1:
@@ -159,9 +155,6 @@ class SklearnMSGMLVAR(SklearnMSGMLR):
                 lag_y = np.zeros(y.shape)*np.nan
                 lag_y[lag:] = copy.deepcopy(y[:-lag])
                 X_to_model = copy.deepcopy(lag_y) if X_to_model is None else np.hstack([X_to_model, lag_y])
-        if not self.ascending:
-            y = y[::-1]
-            X_to_model = X_to_model[::-1]
 
         # include the lags for X
         if X is not None:
@@ -174,10 +167,6 @@ class SklearnMSGMLVAR(SklearnMSGMLR):
             else:
                 to_lag_col = list(set(range(X.shape[1])) - set(self.const_col_index))
                 no_lag_col = self.const_col_index
-
-            if not self.ascending:
-                X = X[::-1]
-                X_to_model = X_to_model[::-1]
 
             to_lag = X[:, to_lag_col]
             no_lag = X[:, no_lag_col]
@@ -194,15 +183,12 @@ class SklearnMSGMLVAR(SklearnMSGMLR):
                     X_to_model = copy.deepcopy(lag_X) if X_to_model is None else np.hstack([X_to_model, lag_X])
 
             X_to_model = copy.deepcopy(no_lag) if X_to_model is None else np.hstack([X_to_model, no_lag])
-            if not self.ascending:
-                X = X[::-1]
-                X_to_model = X_to_model[::-1]
 
         return X_to_model, y, to_lag_col, no_lag_col
     
     def fit(self, X = None, y = None):
         """
-        Fit the MSGMLVAR model to the provided data.
+        Fit the MSGMLVAR model to the provided data. Data has to be in ascending order.
 
         Parameters
         ----------
@@ -240,10 +226,10 @@ class SklearnMSGMLVAR(SklearnMSGMLR):
             else:
                 target_ = ['y'+str(i) for i in range(y.shape[1])]
 
-
-        X_to_model, y, to_lag_col, no_lag_col = self.process(X, y)
         self.input_X_ = X
         self.input_y_ = y
+        X_to_model, y, to_lag_col, no_lag_col = self.process(X, y)
+
         
         X_to_model_col = []
         # generate lags
@@ -255,11 +241,11 @@ class SklearnMSGMLVAR(SklearnMSGMLR):
         if X is not None:
             if self.include_curr_x:
                 X_to_model_col += [features_[k] for k in to_lag_col]
-                # generate lags
-                X_lags = self.X_lags if type(self.X_lags) == list else range(1, self.X_lags+1)
-                if (type(self.X_lags) == int and self.X_lags >= 1) or type(self.X_lags) == list:
-                    for lag in X_lags:
-                        X_to_model_col += ['L{}.{}'.format(lag, features_[k]) for k in to_lag_col]
+            # generate lags
+            X_lags = self.X_lags if type(self.X_lags) == list else range(1, self.X_lags+1)
+            if (type(self.X_lags) == int and self.X_lags >= 1) or type(self.X_lags) == list:
+                for lag in X_lags:
+                    X_to_model_col += ['L{}.{}'.format(lag, features_[k]) for k in to_lag_col]
             X_to_model_col += [features_[k] for k in no_lag_col]
 
         # put them into dataframe
@@ -293,6 +279,7 @@ class SklearnMSGMLVAR(SklearnMSGMLR):
             if type(X) == list:
                 X = np.array(X)
             n_pred = X.shape[0]
+
             input_X_ = self.input_X_
             input_y_ = self.input_y_
 
@@ -304,6 +291,7 @@ class SklearnMSGMLVAR(SklearnMSGMLR):
                 input_y_ = np.vstack([input_y_, np.nan*np.zeros((1, self.n_y_))])
                 X_to_model, y, to_lag_col, no_lag_col = self.process(input_X_, input_y_)
                 X_to_model = X_to_model[-1][np.newaxis, :]
+                
                 if pred_std:
                     input_y_[-1], std = super().predict(X_to_model, pred_std)
                     stds.append(std[0])
@@ -315,7 +303,41 @@ class SklearnMSGMLVAR(SklearnMSGMLR):
                 return input_y_[-n_pred:], np.array(stds)
             else:
                 return input_y_[-n_pred:]
-                
+    
+    def predict_distr(self, X: np.array = None):
+        """
+        Predicts the distribution parameters for the given data.
+
+        Args:
+        - X: Input features. If None, use the training data.
+
+        Returns:
+        - Tuple containing predicted priors, values, and sigmas.
+        """
+        check_is_fitted(self)
+        if X is None:
+            X = self.X_
+            priors, postiors = self.update(self.X_, self.y_, self.thetas_)
+        else:
+            if type(X) == pd.DataFrame:
+                X = X.values
+            y = self.predict(X)
+            n_pred = X.shape[0]
+            input_X_ = self.input_X_
+            input_y_ = self.input_y_
+            input_X_ = np.vstack([input_X_, X ])
+            input_y_ = np.vstack([input_y_, y ])
+            
+            X_to_model, y_to_model, to_lag_col, no_lag_col = self.process(input_X_, input_y_)
+            X_to_model = np.hstack((X_to_model, np.ones(shape=(X_to_model.shape[0], 1)))) if self.fit_intercept else X_to_model
+            X_to_model, y_to_model = pd.DataFrame(X_to_model), pd.DataFrame(y_to_model)
+            
+            data = pd.concat([X_to_model, y_to_model], axis = 1).dropna(axis = 0)
+            priors, postiors = self.update(data.iloc[:, :X_to_model.shape[1]].values,
+                                           data.iloc[:, X_to_model.shape[1]:].values, self.thetas_)
+        
+        gammas, etas, betas, sigmas = self.unpack(self.thetas_)
+        return priors[-n_pred:], X_to_model[-n_pred:].values.dot(betas.T), sigmas
 
     def irf(self, state = 0, periods = 5, thetas = None):
         """

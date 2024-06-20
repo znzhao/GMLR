@@ -153,9 +153,6 @@ class SklearnMSGMLR(BaseEstimator):
 
     Parameters
     ----------
-    ascending: bool, default=True
-        Whether get ascending data order.
-
     n_clusters : int, default=2
         The number of clusters to form.
 
@@ -213,7 +210,6 @@ class SklearnMSGMLR(BaseEstimator):
     # This is a dictionary allowing to define the type of parameters.
     # It used to validate parameter within the `_fit_context` decorator.
     _parameter_constraints = {
-        "ascending": [bool],
         "n_clusters": [int],
         "fit_intercept": [bool],
         "fit_cov": [bool],
@@ -228,10 +224,9 @@ class SklearnMSGMLR(BaseEstimator):
         "pred_mode": [str]
     }
 
-    def __init__(self, ascending: bool = True, n_clusters: int = 2, fit_intercept: bool = True, fit_cov: bool = False, alpha: float = 0.0, 
+    def __init__(self, n_clusters: int = 2, fit_intercept: bool = True, fit_cov: bool = False, alpha: float = 0.0, 
                  norm: int|float = 1, warm_start: bool = False, path: str = None, max_iter:int = 100,
                  tol:float = 1e-4, step_plot: callable = None, pred_mode: Literal['naive', 'loglik'] = 'naive', verbose = 0):
-        self.ascending = ascending
         self.n_clusters = n_clusters
         self.fit_intercept = fit_intercept
         self.fit_cov = fit_cov
@@ -537,7 +532,7 @@ class SklearnMSGMLR(BaseEstimator):
 
     @_fit_context(prefer_skip_nested_validation=True)
     def fit(self, X, y):
-        """Fits the model to the data.
+        """Fits the model to the data. Data has to be in ascending order.
 
         Parameters
         ----------
@@ -560,8 +555,6 @@ class SklearnMSGMLR(BaseEstimator):
             self.target_ = list(y.columns)
         
         X, y = self._validate_data(X, y, accept_sparse=False, multi_output=True)
-        if not self.ascending:
-            X, y =  X[::-1], y[::-1]
         self.X_ = X.astype(float)
         self.y_ = y.astype(float)
 
@@ -757,7 +750,6 @@ class SklearnMSGMLR(BaseEstimator):
             X = self.X_
             priors, postiors = self.update(self.X_, self.y_, self.thetas_)
         else:
-            X = self._validate_data(X, accept_sparse=False, reset=False)
             y = self.predict(X)
             X = np.hstack((X, np.ones(shape=(X.shape[0], 1)))) if self.fit_intercept else X
             priors, postiors = self.update(self.X_, self.y_, self.thetas_)
@@ -765,7 +757,6 @@ class SklearnMSGMLR(BaseEstimator):
             curr_prob = smoothed[-1,:][np.newaxis,:-1] if self.fit_intercept else smoothed[-1,:][np.newaxis,:]
             priors, postiors = self.update(X, y, self.thetas_, curr_prob)
         gammas, etas, betas, sigmas = self.unpack(self.thetas_)
-
         return priors, X.dot(betas.T), sigmas
     
     def summary(self):
